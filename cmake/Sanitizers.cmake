@@ -1,0 +1,7 @@
+if(MSC_SANITIZE)
+    if(MSVC)
+        message(FATAL_ERROR "MSC_SANITIZE is for GCC/Clang. On MSVC use /fsanitize=address by hand.")
+    endif()
+    add_compile_options(-fsanitize=address,undefined -fno-omit-frame-pointer -fno-sanitize-recover=all)
+    add_link_options(-fsanitize=address,undefined)
+endif()
