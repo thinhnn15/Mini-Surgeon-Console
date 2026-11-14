@@ -98,7 +98,9 @@ void SyntheticSource::run(const std::stop_token& stop) {
     // instead of after up to one full period. Nothing else is shared through this mutex.
     std::mutex mutex;
     std::condition_variable_any wake;
-    const FineTimerResolution fineTimer;
+    // Held for its constructor/destructor only. On Linux both are empty, so GCC would call
+    // it unused without the attribute.
+    [[maybe_unused]] const FineTimerResolution fineTimer;
 
     auto next = std::chrono::steady_clock::now();
     while (!stop.stop_requested()) {
