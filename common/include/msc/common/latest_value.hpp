@@ -54,7 +54,7 @@ public:
         // Release: the write above becomes visible to whoever later acquires this slot.
         // Acquire: the slot we get back may have just been given up by the reader; its
         // reads of that slot must be finished before we overwrite it.
-        const std::uint8_t previous = middle_.exchange(back_ | kFreshBit, std::memory_order_acq_rel);
+        const std::uint8_t previous = middle_.exchange(back_ | kFreshBit, std::memory_order_relaxed);
         back_ = previous & kIndexMask;
     }
 
@@ -66,7 +66,7 @@ public:
         // Relaxed is enough for this peek: it only decides whether to swap. The exchange
         // below is the operation that synchronises with the writer.
         if ((middle_.load(std::memory_order_relaxed) & kFreshBit) != 0) {
-            const std::uint8_t previous = middle_.exchange(front_, std::memory_order_acq_rel);
+            const std::uint8_t previous = middle_.exchange(front_, std::memory_order_relaxed);
             front_ = previous & kIndexMask;
             fresh = true;
         }
