@@ -13,6 +13,7 @@ set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 option(MSC_BUILD_CONSOLE "Build the Qt console app (needs Qt 6.8 or newer)" ON)
 option(MSC_WERROR "Treat compiler warnings as errors" OFF)
 option(MSC_SANITIZE "Build with AddressSanitizer and UndefinedBehaviorSanitizer (GCC/Clang)" OFF)
+option(MSC_TSAN "Build with ThreadSanitizer (GCC/Clang); cannot be combined with MSC_SANITIZE" OFF)
 
 list(APPEND CMAKE_MODULE_PATH "${CMAKE_CURRENT_SOURCE_DIR}/cmake")
 include(Warnings)
