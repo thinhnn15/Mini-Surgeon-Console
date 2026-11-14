@@ -63,7 +63,8 @@ void fillRect(Frame& frame, std::uint32_t left, std::uint32_t top, std::uint32_t
 
 }  // namespace
 
-std::uint32_t squareLeft(std::uint32_t frameWidth, std::uint32_t frameHeight, std::uint64_t sequence) noexcept {
+std::uint32_t squareLeft(std::uint32_t frameWidth, std::uint32_t frameHeight,
+                         std::uint64_t sequence) noexcept {
     const Layout l = layoutFor(frameWidth, frameHeight);
     const std::uint64_t travel = frameWidth - l.squareSize;
     return static_cast<std::uint32_t>((sequence * kSquareStepPx) % travel);

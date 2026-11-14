@@ -15,4 +15,4 @@ Checks: >
   -readability-magic-numbers,
   -readability-identifier-length
 WarningsAsErrors: ''
-HeaderFilterRegex: '.*/(common|teleop|arm_sim|console_app)/.*'
+HeaderFilterRegex: '.*/(common|video|teleop|arm_sim|console_app)/.*'
