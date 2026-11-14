@@ -71,7 +71,7 @@ TEST(LatestValue, EachPublishIsSeenOnceWhenReaderKeepsUp) {
 TEST(LatestValue, REQ_VID_001_NeverTearsAndNeverGoesBackwards) {
     msc::LatestValue<Sample> box;
 
-    std::jthread writer([&box] {
+    const std::jthread writer([&box] {
         for (std::uint64_t i = 1; i <= kStressIterations; ++i) {
             box.publish(Sample{i, i, i, i});
         }
