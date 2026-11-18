@@ -26,6 +26,7 @@ endif()
 
 add_subdirectory(common)
 add_subdirectory(video)
+add_subdirectory(comms)
 add_subdirectory(arm_sim)
 
 if(MSC_BUILD_CONSOLE)
