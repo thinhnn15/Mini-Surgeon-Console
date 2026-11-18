@@ -40,18 +40,31 @@ jobs:
         run: ctest --preset ${{ matrix.preset }}
 
   sanitizers:
-    name: linux-asan (ASan + UBSan)
+    name: ${{ matrix.name }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - preset: linux-asan
+            name: linux-asan (ASan + UBSan)
+          - preset: linux-tsan
+            name: linux-tsan (ThreadSanitizer)
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v5
       - name: Install packages
         run: sudo apt-get update && sudo apt-get install -y ninja-build
+      # Kernels 6.6+ randomise mmap with more bits than TSan's shadow memory layout allows
+      # ("FATAL: ThreadSanitizer: unexpected memory mapping"). Lower it for this job only.
+      - name: Allow TSan memory layout
+        if: matrix.preset == 'linux-tsan'
+        run: sudo sysctl vm.mmap_rnd_bits=28
       - name: Configure
-        run: cmake --preset linux-asan -DMSC_WERROR=ON
+        run: cmake --preset ${{ matrix.preset }} -DMSC_WERROR=ON
       - name: Build
-        run: cmake --build --preset linux-asan
+        run: cmake --build --preset ${{ matrix.preset }}
       - name: Test
-        run: ctest --preset linux-asan
+        run: ctest --preset ${{ matrix.preset }}
 
   static-analysis:
     name: clang-format + clang-tidy

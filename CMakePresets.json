@@ -31,12 +31,19 @@
       "displayName": "Linux, GCC, ASan + UBSan, no Qt",
       "inherits": "linux-gcc",
       "cacheVariables": { "MSC_SANITIZE": "ON", "MSC_BUILD_CONSOLE": "OFF" }
+    },
+    {
+      "name": "linux-tsan",
+      "displayName": "Linux, GCC, TSan, no Qt",
+      "inherits": "linux-gcc",
+      "cacheVariables": { "MSC_TSAN": "ON", "MSC_BUILD_CONSOLE": "OFF" }
     }
   ],
   "buildPresets": [
     { "name": "windows-msvc", "configurePreset": "windows-msvc", "configuration": "Debug" },
     { "name": "linux-gcc", "configurePreset": "linux-gcc" },
-    { "name": "linux-asan", "configurePreset": "linux-asan" }
+    { "name": "linux-asan", "configurePreset": "linux-asan" },
+    { "name": "linux-tsan", "configurePreset": "linux-tsan" }
   ],
   "testPresets": [
     {
@@ -46,6 +53,12 @@
       "output": { "outputOnFailure": true }
     },
     { "name": "linux-gcc", "configurePreset": "linux-gcc", "output": { "outputOnFailure": true } },
-    { "name": "linux-asan", "configurePreset": "linux-asan", "output": { "outputOnFailure": true } }
+    { "name": "linux-asan", "configurePreset": "linux-asan", "output": { "outputOnFailure": true } },
+    {
+      "name": "linux-tsan",
+      "configurePreset": "linux-tsan",
+      "output": { "outputOnFailure": true },
+      "environment": { "TSAN_OPTIONS": "halt_on_error=1" }
+    }
   ]
 }
