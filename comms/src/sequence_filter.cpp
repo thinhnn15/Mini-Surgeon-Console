@@ -12,7 +12,7 @@ SequenceVerdict SequenceFilter::check(std::uint32_t session, std::uint32_t seque
         }
         if (session_) {
             // The sender restarted: the old session will never be followed again.
-            retired_[nextRetired_] = *session_;
+            retired_[nextRetired_] = session_;
             nextRetired_ = (nextRetired_ + 1) % kRetiredSessions;
             ++stats_.sessionChanges;
         }
