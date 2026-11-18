@@ -1,5 +1,6 @@
 #include "msc/video/synthetic_source.hpp"
 
+#include "msc/common/fine_timer.hpp"
 #include "msc/video/test_pattern.hpp"
 
 #include <chrono>
@@ -7,37 +8,9 @@
 #include <mutex>
 #include <stdexcept>
 
-#if defined(_WIN32)
-#ifndef NOMINMAX
-#define NOMINMAX
-#endif
-#include <windows.h>
-// windows.h first: timeapi.h depends on it.
-#include <timeapi.h>
-#endif
-
 namespace msc::video {
 
 namespace {
-
-// Windows wakes sleeping threads on a ~15.6 ms timer tick by default, so a 16.7 ms frame
-// period comes out as 15.6 or 31.2 ms: measured gaps 15.0-32.2 ms at 60 fps, i.e. visibly
-// doubled frames. With a 1 ms tick the gaps were 15.0-18.6 ms. The request is per process
-// on Windows 10 2004 and later, and is held only while the producer thread runs.
-class FineTimerResolution {
-public:
-#if defined(_WIN32)
-    FineTimerResolution() noexcept { timeBeginPeriod(1); }
-    ~FineTimerResolution() { timeEndPeriod(1); }
-#else
-    FineTimerResolution() noexcept = default;  // Linux timers are already fine-grained
-    ~FineTimerResolution() = default;
-#endif
-    FineTimerResolution(const FineTimerResolution&) = delete;
-    FineTimerResolution& operator=(const FineTimerResolution&) = delete;
-    FineTimerResolution(FineTimerResolution&&) = delete;
-    FineTimerResolution& operator=(FineTimerResolution&&) = delete;
-};
 
 // All three slots start as fully allocated frames, so the producer never allocates.
 // The sequence is reset to 0 so that latest() reads as "no frame yet" before the first one.
@@ -100,7 +73,7 @@ void SyntheticSource::run(const std::stop_token& stop) {
     std::condition_variable_any wake;
     // Held for its constructor/destructor only. On Linux both are empty, so GCC would call
     // it unused without the attribute.
-    [[maybe_unused]] const FineTimerResolution fineTimer;
+    [[maybe_unused]] const msc::FineTimerResolution fineTimer;
 
     auto next = std::chrono::steady_clock::now();
     while (!stop.stop_requested()) {

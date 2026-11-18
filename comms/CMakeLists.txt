@@ -2,6 +2,7 @@
 add_library(msc_comms STATIC
     src/protocol.cpp
     src/sequence_filter.cpp
+    src/session.cpp
     src/udp_socket.cpp)
 add_library(msc::comms ALIAS msc_comms)
 

@@ -128,3 +128,27 @@ Template:
 - Fix: `WSAIoctl(SIO_UDP_CONNRESET, FALSE)` on every socket. Test `UdpSocket.SendingToAPortNobodyListensOnDoesNotBreakReceiving` checks it; with the ioctl set back to TRUE it fails with error 10054.
 - Also: a datagram larger than the buffer is reported as truncated, not silently cut. Linux needs `recvmsg` and `MSG_TRUNC` to tell; Windows says `WSAEMSGSIZE`. The rest of a UDP datagram is gone, never delivered by the next receive.
 - Interview sentence: "On Windows, sending UDP to a dead port makes the next recvfrom fail with 'connection reset' — on a connectionless socket. I found it with a test of the restart case and turned it off with SIO_UDP_CONNRESET, because the arm must keep running while the console comes and goes."
+
+## 2026-11-18 · M3.3 · The joints overshot: continuous braking maths in a stepped simulation
+- Symptom: a 1 rad move of the base joint (1.5 rad/s, 6 rad/s²) should take 0.917 s by the trapezoid; the model took 0.947 s and passed the target by 0.12 mrad before crawling back.
+- Cause: the braking speed was `sqrt(2 a d)`, which is right for continuous motion. In steps of 1 ms the step first moves `v·dt` and only then brakes, and braking in steps covers `v²/2a − v·dt/2`. Every step started braking a little late.
+- Fix: the largest speed that still stops at the target in the stepped motion, `v = −a·dt/2 + sqrt((a·dt/2)² + 2ad)`. Now no overshoot, and the move takes 0.91–0.93 s.
+- The fix exposed a second bug, caught by the test that checks every step against the limits: the "arrived, stop exactly here" snap set the speed to 0 after the speed had already changed in the same step, i.e. up to 2·a·dt, measured 8 rad/s² against a limit of 6. The snap now looks at the speed at the start of the step.
+- Interview sentence: "A model that is integrated in steps needs the stepped version of the physics: my joints overshot until I derived the braking speed for discrete steps, and a test that checks the acceleration limit on every step caught the snap that broke it."
+
+## 2026-11-18 · M3.3 · A 1 kHz loop on Windows 11: 635 Hz until two fixes
+- Question from the issue: how far off is a 1 kHz loop that sleeps until each deadline?
+- Measured (5 s, Debug, the loop alone):
+
+| Setup | Rate | Overruns | Tick lateness p50 / p99 / max |
+| --- | --- | --- | --- |
+| `timeBeginPeriod(1)` + `sleep_until` (the M2.2 fix) | 635 Hz | 200 | 0.97 / 15.0 / 15.6 ms |
+| + opt out of power throttling of timer resolution | 976–981 Hz | 82–107 | 0.95–0.98 / 2.05–2.11 / 2.5–2.8 ms |
+| + high-resolution waitable timer | 1000.1 Hz | 0 | 0.24–0.25 / 0.64–0.66 / 0.96–0.99 ms |
+| high-resolution timer without the opt-out | 1000.1 Hz | 0 | 0.26–0.27 / 0.60–0.70 / 1.26–1.36 ms |
+| all, Release | 1000.2 Hz | 0 | 0.28 / 0.73 / 1.86 ms |
+
+- Cause 1, the 15.6 ms ticks: Windows 11 ignores a process's timer resolution request while the process has no visible window, to save power. `arm_sim` never has a window, so the M2.2 fix did nothing for it. (The console has a window, which is why the video producer was fine.) `SetProcessInformation(ProcessPowerThrottling, PROCESS_POWER_THROTTLING_IGNORE_TIMER_RESOLUTION)` opts out.
+- Cause 2, the ~1 ms lateness on every tick: even at 1 ms resolution, a plain sleep wakes on the next 1 ms tick, so a 1 ms loop is always about one period late, and every tenth tick or so is late enough to count as an overrun. A waitable timer created with `CREATE_WAITABLE_TIMER_HIGH_RESOLUTION` is not tied to the tick at all. With it the loop runs at 1000 Hz, no overruns, worst tick under 1 ms late, and it no longer needs the throttling opt-out (which stays for the other waits in the process).
+- Does 0.25 ms of lateness matter? The model is stepped by the measured time since the last tick, not by the nominal 1 ms, so the motion stays right; lateness only adds that much delay between a command and its effect. A real arm controller runs on a real-time OS (or PREEMPT_RT Linux) and is held to microseconds; that is out of scope here. Linux numbers come from the CI log ("Arm loop timing" step).
+- Interview sentence: "My 1 kHz loop ran at 635 Hz on Windows 11 because the OS ignores timer-resolution requests from windowless processes; I measured each fix separately, and a high-resolution waitable timer brought it to 1000 Hz with the worst tick 1 ms late."

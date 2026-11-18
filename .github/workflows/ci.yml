@@ -41,6 +41,14 @@ jobs:
         run: cmake --build --preset ${{ matrix.preset }}
       - name: Test
         run: ctest --preset ${{ matrix.preset }}
+      # Not a test (a shared CI runner's timing proves nothing), a measurement for the journal:
+      # how evenly the arm's 1 kHz loop ticks on this OS.
+      - name: Arm loop timing
+        shell: bash
+        run: |
+          exe=build/${{ matrix.preset }}/arm_sim/arm_sim
+          [ -f "$exe" ] || exe=build/${{ matrix.preset }}/arm_sim/Debug/arm_sim.exe
+          "$exe" --listen=127.0.0.1:0 --duration=3 --report
 
   sanitizers:
     name: ${{ matrix.name }}

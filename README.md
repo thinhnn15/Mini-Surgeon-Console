@@ -65,6 +65,10 @@ session. Pick a backend with `QSG_RHI_BACKEND=d3d11|d3d12|vulkan|opengl`.
 frames; add `--no-vsync` to present without waiting for the display. The same figures are on
 the console's side panel while it runs.
 
+`arm_sim` is the simulated arm: a 1 kHz joint loop that follows `JointCommand` packets within
+each joint's position, velocity and acceleration limits and sends `JointTelemetry` back.
+`arm_sim --listen=127.0.0.1:47001 --duration=5 --report` prints how evenly it ticked.
+
 `console_app --source camera` shows a webcam instead of the synthetic pattern (Qt Multimedia;
 the console builds without it). `--camera=TEXT` picks one by name or id, `--list-cameras` shows
 each camera's formats and the one used. Without a matching camera the console says so and shows
@@ -83,7 +87,7 @@ video/         plain C++: Frame, test pattern with a sequence barcode, Synthetic
                presentation timing, YUV to RGBA conversion, frozen-picture rule
 comms/         plain C++: the arm link's wire protocol (session, sequence, timestamp, CRC-32), sequence filter,
                UDP socket (Winsock / BSD sockets)
-arm_sim/       the simulated arm process (plain C++, no Qt)
+arm_sim/       the simulated arm process (plain C++, no Qt): joint model, 1 kHz controller
 console_app/   the Qt Quick console; VideoItem draws the video with QRhi (ADR 0003), CameraSource
 cmake/         warnings, sanitizers, GoogleTest
 docs/          requirements, risks, architecture decisions, dev journal
