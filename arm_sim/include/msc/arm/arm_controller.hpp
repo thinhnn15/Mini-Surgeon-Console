@@ -16,6 +16,7 @@
 #include <functional>
 #include <optional>
 #include <string_view>
+#include <variant>
 
 namespace msc::arm {
 
@@ -36,6 +37,7 @@ struct ArmControllerStats {
     std::uint64_t ticks = 0;
     std::uint64_t overruns = 0;  // ticks more than a whole period late: skipped, not caught up
     std::uint64_t commandsApplied = 0;
+    std::uint64_t holdCommands = 0;
     std::uint64_t commandsReplaced = 0;      // accepted, but a newer one came in the same tick
     std::uint64_t commandsIgnored = 0;       // intact and new, but the console was not alive
     std::array<std::uint64_t, 8> refused{};  // by comms::DecodeError
@@ -65,6 +67,8 @@ struct ArmControllerStats {
 // move "home" (moving on its own, with nobody watching, is the danger being avoided). Commands
 // are ignored while the console is not alive. When heartbeats come back the arm still holds
 // until a new command arrives: it never resumes toward a target from before the silence.
+// A HoldCommand from the console (sent while nobody drives the arm) holds the same way, with
+// the link alive.
 //
 // Why a fixed rate: the motion is integrated in steps, and steps of a known, even size keep it
 // predictable. Running "when a command arrives" would make the arm's motion depend on the
@@ -98,7 +102,8 @@ public:
 
 private:
     void receiveAll(Nanoseconds now);
-    void updateState(Nanoseconds now, const std::optional<comms::JointCommand>& command);
+    using Command = std::variant<comms::JointCommand, comms::HoldCommand>;
+    void updateState(Nanoseconds now, const std::optional<Command>& command);
     void send(Nanoseconds now, const comms::Message& message, std::uint64_t& counter);
     void log(std::string_view message) const;
 

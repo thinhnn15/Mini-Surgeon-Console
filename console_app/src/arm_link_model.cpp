@@ -44,7 +44,7 @@ void ArmLinkModel::refresh() {
                 2.0 * std::numbers::pi * ((t / kDemoPeriodSeconds) + (static_cast<double>(i) / 12.0));
             target[i] = static_cast<float>(kDemoAmplitude * std::sin(phase));
         }
-        link_->setTarget(target);
+        link_->move(target);
     }
     if (link_->readStatus(status_)) {
         emit changed();

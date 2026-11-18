@@ -38,8 +38,12 @@ void ArmLink::stop() {
     thread_.join();
 }
 
-void ArmLink::setTarget(const JointArray& target) noexcept {
-    targetIn_.publish(Target{.set = true, .joints = target});
+void ArmLink::move(const JointArray& target) noexcept {
+    commandIn_.publish(Command{.kind = Command::Kind::Move, .target = target});
+}
+
+void ArmLink::hold() noexcept {
+    commandIn_.publish(Command{.kind = Command::Kind::Hold, .target = {}});
 }
 
 void ArmLink::run(const std::stop_token& stop) {
@@ -52,10 +56,14 @@ void ArmLink::run(const std::stop_token& stop) {
     while (!stop.stop_requested()) {
         const Nanoseconds now = clock_->now();
         if (now >= next) {
-            static_cast<void>(targetIn_.read(target_));
+            static_cast<void>(commandIn_.read(command_));
             send(now, Heartbeat{});
-            if (target_.set) {
-                send(now, JointCommand{.target = target_.joints});
+            if (command_.kind == Command::Kind::Move) {
+                current_.lastCommandSent = nextSequence_;
+                send(now, JointCommand{.target = command_.target});
+            } else if (command_.kind == Command::Kind::Hold) {
+                current_.lastCommandSent = nextSequence_;
+                send(now, HoldCommand{});
             }
             current_.link = heartbeat_.state(now);
             current_.silence = heartbeat_.silence(now).value_or(Nanoseconds{0});
@@ -93,7 +101,8 @@ void ArmLink::handle(const ReceiveResult& received, std::span<const std::byte> b
         return;
     }
     const auto& packet = std::get<Packet>(decoded);
-    if (std::holds_alternative<JointCommand>(packet.message)) {
+    if (std::holds_alternative<JointCommand>(packet.message) ||
+        std::holds_alternative<HoldCommand>(packet.message)) {
         return;  // not for a console
     }
     if (fromArm_.check(packet.session, packet.sequence) != SequenceVerdict::Accepted) {

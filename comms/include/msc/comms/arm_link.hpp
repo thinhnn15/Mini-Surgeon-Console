@@ -29,31 +29,51 @@ struct ArmLinkConfig {
 struct ArmLinkStatus {
     LinkState link = LinkState::Waiting;
     bool telemetrySeen = false;
-    JointTelemetry telemetry;  // the newest one
-    Nanoseconds silence{0};    // since the arm's last heartbeat
+    JointTelemetry telemetry{};  // the newest one
+    Nanoseconds silence{0};      // since the arm's last heartbeat
     std::uint64_t heartbeatsReceived = 0;
     std::uint64_t telemetryReceived = 0;
     std::uint64_t refused = 0;  // malformed or corrupted datagrams
     std::uint64_t oldOrDuplicate = 0;
     std::uint64_t lost = 0;
+    std::uint32_t lastCommandSent = 0;  // sequence of our newest move or hold (0: none yet)
+};
+
+// What the teleop core needs from the arm link: an interface, so the core is tested against a
+// fake arm with a fake clock, and runs against ArmLink for real.
+class ArmPort {
+public:
+    ArmPort() = default;
+    ArmPort(const ArmPort&) = delete;
+    ArmPort& operator=(const ArmPort&) = delete;
+    ArmPort(ArmPort&&) = delete;
+    ArmPort& operator=(ArmPort&&) = delete;
+    virtual ~ArmPort() = default;
+
+    // From now on, command the arm to this target (sent every period).
+    virtual void move(const JointArray& target) noexcept = 0;
+    // From now on, command the arm to hold (sent every period).
+    virtual void hold() noexcept = 0;
+    // The newest link status, if there is a new one. One reader.
+    [[nodiscard]] virtual bool readStatus(ArmLinkStatus& status) noexcept = 0;
 };
 
 // The console's end of the arm link: a thread of its own (the comms thread in the README),
 // never the GUI thread, so a busy or stalled UI cannot stop the heartbeats. If it did, the arm
 // would hold, which is safe, but it would hold for no reason.
 //
-// Every heartbeat period it sends a heartbeat and, once a target has been set, a JointCommand
-// for the newest target; in between it waits on the socket for the arm's telemetry and
-// heartbeats. Everything it sends is one stream (one session, one sequence counter), which is
-// what the arm's SequenceFilter expects.
+// Every heartbeat period it sends a heartbeat and the newest command: a JointCommand after
+// move(), a HoldCommand after hold(), nothing before either; in between it waits on the socket
+// for the arm's telemetry and heartbeats. Everything it sends is one stream (one session, one sequence
+// counter), which is what the arm's SequenceFilter expects.
 //
-// Threads: construct, start(), stop() on one thread; setTarget() from one producer thread (the
-// GUI, later the teleop core) and readStatus() from one consumer thread: both go through
-// lock-free LatestValue mailboxes.
-class ArmLink {
+// Threads: construct, start(), stop() on one thread; move() / hold() from one producer thread
+// (the teleop core) and readStatus() from one consumer thread (the teleop core too): both go
+// through lock-free LatestValue mailboxes.
+class ArmLink final : public ArmPort {
 public:
     ArmLink(const Clock& clock, UdpSocket socket, ArmLinkConfig config = {});
-    ~ArmLink();
+    ~ArmLink() override;
     ArmLink(const ArmLink&) = delete;
     ArmLink& operator=(const ArmLink&) = delete;
     ArmLink(ArmLink&&) = delete;
@@ -63,17 +83,17 @@ public:
     // Returns once the thread has finished. The arm notices the silence and holds.
     void stop();
 
-    // The target the arm should go to; sent every period from now on.
-    void setTarget(const JointArray& target) noexcept;
-    // The newest status, if there is a new one since the last call.
-    [[nodiscard]] bool readStatus(ArmLinkStatus& status) noexcept { return status_.read(status); }
+    void move(const JointArray& target) noexcept override;
+    void hold() noexcept override;
+    [[nodiscard]] bool readStatus(ArmLinkStatus& status) noexcept override { return status_.read(status); }
 
     [[nodiscard]] const Endpoint& localEndpoint() const noexcept { return socket_.localEndpoint(); }
 
 private:
-    struct Target {
-        bool set = false;
-        JointArray joints{};
+    struct Command {
+        enum class Kind : std::uint8_t { None, Move, Hold };
+        Kind kind = Kind::None;
+        JointArray target{};
     };
 
     void run(const std::stop_token& stop);
@@ -85,11 +105,11 @@ private:
     UdpSocket socket_;
     ArmLinkConfig config_;
 
-    LatestValue<Target> targetIn_;       // producer -> link thread
+    LatestValue<Command> commandIn_;     // producer -> link thread
     LatestValue<ArmLinkStatus> status_;  // link thread -> consumer
 
     // Link thread only.
-    Target target_;
+    Command command_;
     ArmLinkStatus current_;
     HeartbeatMonitor heartbeat_;
     SequenceFilter fromArm_;

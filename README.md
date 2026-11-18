@@ -94,7 +94,8 @@ video/         plain C++: Frame, test pattern with a sequence barcode, Synthetic
                presentation timing, YUV to RGBA conversion, frozen-picture rule
 comms/         plain C++: the arm link's wire protocol (session, sequence, timestamp, CRC-32), sequence filter,
                UDP socket (Winsock / BSD sockets)
-teleop/        plain C++: the teleop state machine (std::variant), clutch and motion scaling
+teleop/        plain C++: the teleop state machine (std::variant), clutch and motion scaling, the teleop
+               core (fixed-rate thread, watchdogs)
 arm_sim/       the simulated arm process (plain C++, no Qt): joint model, 1 kHz controller
 console_app/   the Qt Quick console; VideoItem draws the video with QRhi (ADR 0003), CameraSource
 cmake/         warnings, sanitizers, GoogleTest

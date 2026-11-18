@@ -62,7 +62,7 @@ void ArmController::tick() {
 
 void ArmController::receiveAll(Nanoseconds now) {
     std::array<std::byte, comms::kMaxPacketSize> buffer{};
-    std::optional<comms::JointCommand> newest;
+    std::optional<Command> newest;
     for (;;) {
         const comms::ReceiveResult r = socket_.receive(buffer, 0ms);
         if (r.status != comms::ReceiveStatus::Datagram) {
@@ -92,18 +92,24 @@ void ArmController::receiveAll(Nanoseconds now) {
             }
             heartbeat_.received(now);
             ++stats_.heartbeatsReceived;
-        } else if (const auto* command = std::get_if<comms::JointCommand>(&packet.message)) {
+        } else if (const auto* move = std::get_if<comms::JointCommand>(&packet.message)) {
             if (newest) {
                 ++stats_.commandsReplaced;
             }
-            newest = *command;
+            newest = *move;
+            lastCommandSequence_ = packet.sequence;
+        } else if (std::holds_alternative<comms::HoldCommand>(packet.message)) {
+            if (newest) {
+                ++stats_.commandsReplaced;
+            }
+            newest = comms::HoldCommand{};
             lastCommandSequence_ = packet.sequence;
         }
     }
     updateState(now, newest);
 }
 
-void ArmController::updateState(Nanoseconds now, const std::optional<comms::JointCommand>& command) {
+void ArmController::updateState(Nanoseconds now, const std::optional<Command>& command) {
     const comms::LinkState link = heartbeat_.state(now);
     if (link != link_) {
         if (link == comms::LinkState::Lost) {
@@ -127,11 +133,24 @@ void ArmController::updateState(Nanoseconds now, const std::optional<comms::Join
         }
         return;
     }
-    if (command) {
+    if (!command) {
+        return;
+    }
+    if (std::holds_alternative<comms::HoldCommand>(*command)) {
+        // The console says nobody is driving: brake and stay. From Idle there is nothing to stop.
+        if (state_ == comms::ArmState::Following) {
+            model_.hold();
+            state_ = comms::ArmState::Holding;
+            log("hold command from the console: holding position");
+        }
+        ++stats_.holdCommands;
+        return;
+    }
+    if (const auto* move = std::get_if<comms::JointCommand>(&*command)) {
         if (state_ == comms::ArmState::Holding) {
             log("new command: following again");
         }
-        model_.setTarget(command->target);
+        model_.setTarget(move->target);
         state_ = comms::ArmState::Following;
         ++stats_.commandsApplied;
     }

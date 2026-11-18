@@ -51,6 +51,8 @@ JointArray all(float value) {
 class FakeConsole {
 public:
     void heartbeat(const Endpoint& arm) { send(arm, nextSequence_++, comms::Heartbeat{}); }
+    void holdCommand(const Endpoint& arm) { send(arm, nextSequence_++, comms::HoldCommand{}); }
+    [[nodiscard]] std::uint32_t lastSequence() const { return nextSequence_ - 1; }
     void command(const Endpoint& arm, const JointArray& target) {
         send(arm, nextSequence_++, comms::JointCommand{.target = target});
     }
@@ -326,6 +328,45 @@ TEST(ArmController, REQ_SAF_001_WhenTheConsoleComesBackItWaitsForANewCommand) {
     ASSERT_TRUE(tickUntil(arm, clock, [&] { return arm.stats().commandsApplied > before; }));
     EXPECT_EQ(arm.state(), ArmState::Following);
     EXPECT_EQ(arm.model().target(), all(0.5F));
+}
+
+TEST(ArmController, AHoldCommandStopsTheArmWithTheLinkAlive) {
+    ManualClock clock;
+    ArmController arm(clock, openLoopback());
+    FakeConsole console;
+    startFollowing(arm, clock, console, all(2.0F));
+    for (int i = 0; i < 20; ++i) {
+        ASSERT_TRUE(beat(arm, clock, console));
+        clock.advance(9ms);
+        arm.tick();
+    }
+    console.holdCommand(arm.localEndpoint());
+    const std::uint32_t holdSequence = console.lastSequence();
+    ASSERT_TRUE(tickUntil(arm, clock, [&] { return arm.state() == ArmState::Holding; }));
+    EXPECT_EQ(arm.consoleLink(), comms::LinkState::Alive);
+    EXPECT_EQ(arm.stats().holds, 0U);  // not the watchdog: told to
+    // The telemetry acknowledges the hold like any command.
+    std::optional<comms::JointTelemetry> report;
+    ASSERT_TRUE(tickUntil(arm, clock, [&] {
+        const auto t = console.drain().telemetry;
+        if (t) {
+            report = t;
+        }
+        return report && report->lastCommandSequence == holdSequence;
+    }));
+    EXPECT_EQ(report->state, ArmState::Holding);
+
+    // Braking at the limits, then staying; a new move command resumes.
+    for (int i = 0; i < 250; ++i) {  // 2.5 s, heartbeats every 10 ms: the link stays alive
+        ASSERT_TRUE(beat(arm, clock, console));
+        clock.advance(9ms);
+        arm.tick();
+    }
+    EXPECT_TRUE(arm.model().settled());
+    EXPECT_EQ(arm.consoleLink(), comms::LinkState::Alive);
+    console.command(arm.localEndpoint(), all(0.1F));
+    ASSERT_TRUE(tickUntil(arm, clock, [&] { return arm.state() == ArmState::Following; }));
+    EXPECT_EQ(arm.model().target(), all(0.1F));
 }
 
 TEST(ArmController, RunTicksAtItsPeriod) {

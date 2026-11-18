@@ -109,8 +109,8 @@ TEST(ArmLink, SendsTheNewestTargetAsACommand) {
     FakeArm arm;
     ArmLink link(clock, openLoopback(), ArmLinkConfig{.arm = arm.endpoint()});
     link.start();
-    link.setTarget(all(0.1F));
-    link.setTarget(all(0.7F));
+    link.move(all(0.1F));
+    link.move(all(0.7F));
     std::optional<JointCommand> command;
     const auto giveUp = Steady::now() + 2s;
     while (Steady::now() < giveUp && !(command && command->target == all(0.7F))) {

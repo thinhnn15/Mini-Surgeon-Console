@@ -158,7 +158,7 @@ int runConsole(const Endpoint& arm) {
     }
     msc::comms::ArmLink link(clock, std::move(*socket),
                              msc::comms::ArmLinkConfig{.arm = arm, .heartbeatPeriod = kHeartbeatPeriod});
-    link.setTarget(all(1.8F));
+    link.move(all(1.8F));
     link.start();
     std::this_thread::sleep_for(60s);  // killed long before this
     return 0;

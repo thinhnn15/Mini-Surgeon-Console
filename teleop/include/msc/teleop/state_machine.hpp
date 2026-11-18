@@ -96,7 +96,7 @@ enum class Outcome : std::uint8_t {
 
 struct Result {
     Outcome outcome = Outcome::Unchanged;
-    std::string_view why;  // for Refused: shown to the operator
+    std::string_view why{};  // for Refused: shown to the operator
 };
 
 // The teleop state machine: which state the console is in, what every event does to it, and

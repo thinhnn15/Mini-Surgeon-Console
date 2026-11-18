@@ -68,8 +68,12 @@ void fixCrc(Bytes& bytes) {
     }
 }
 
+Packet hold() {
+    return Packet{.session = 3, .sequence = 77, .timestamp = Nanoseconds{9}, .message = HoldCommand{}};
+}
+
 TEST(Protocol, EveryMessageSurvivesARoundTrip) {
-    for (const Packet& packet : {heartbeat(), command(), telemetry()}) {
+    for (const Packet& packet : {heartbeat(), command(), telemetry(), hold()}) {
         const Bytes bytes = encoded(packet);
         ASSERT_EQ(bytes.size(), encodedSize(packet.message));
         const DecodeResult result = decode(bytes);
@@ -82,6 +86,7 @@ TEST(Protocol, SizesOfVersion1) {
     EXPECT_EQ(encodedSize(Heartbeat{}), 28U);
     EXPECT_EQ(encodedSize(JointCommand{}), 52U);
     EXPECT_EQ(encodedSize(JointTelemetry{}), 81U);
+    EXPECT_EQ(encodedSize(HoldCommand{}), 28U);
     EXPECT_LE(encodedSize(JointTelemetry{}), kMaxPacketSize);
 }
 
@@ -104,7 +109,7 @@ TEST(Protocol, HeaderIsLittleEndianByteForByte) {
 }
 
 TEST(Protocol, REQ_COM_001_EverySingleBitFlipIsRefused) {
-    for (const Packet& packet : {heartbeat(), command(), telemetry()}) {
+    for (const Packet& packet : {heartbeat(), command(), telemetry(), hold()}) {
         const Bytes original = encoded(packet);
         for (std::size_t bit = 0; bit < original.size() * 8; ++bit) {
             Bytes corrupted = original;
