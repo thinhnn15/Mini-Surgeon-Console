@@ -39,6 +39,14 @@ std::uint32_t pixels(int length) {
     return static_cast<std::uint32_t>(std::max(length, 0));
 }
 
+// The overlay shader's uniform block (std140): a mat4, then two vec4.
+struct HudUniforms {
+    std::array<float, 16> transform{};
+    std::array<float, 4> colour{};
+    std::array<float, 4> ring{};  // inner radius, outer radius, edge softness, unused
+};
+static_assert(sizeof(HudUniforms) == 96, "must match the Hud block in hud.vert / hud.frag");
+
 QShader loadShader(const QString& resourcePath) {
     QFile file(resourcePath);
     if (!file.open(QIODevice::ReadOnly)) {
@@ -62,12 +70,22 @@ private:
     // Makes the texture match the frame size. Returns false if it could not be created.
     bool ensureTextureSize(const QSize& size);
     void uploadFrame(const Frame& frame, QRhiResourceUpdateBatch* updates);
+    void createHudPipeline(QRhiCommandBuffer* cb);
+    // The marker for the frame on screen, and its uniforms into `updates` if it is to be drawn.
+    [[nodiscard]] bool prepareHud(const msc::video::PixelRect& box, QRhiResourceUpdateBatch*& updates);
     // Render thread, right after the window's swap (Present) has returned.
     void onSwapped();
 
     std::shared_ptr<FrameSource> source_;
     const msc::Clock* clock_ = nullptr;
     bool hasFrame_ = false;  // a frame has been uploaded since the source was set
+
+    // The overlay (M5.3). The frame in the texture, by number and capture time: the marker is
+    // looked up for exactly this frame, also on draws that bring no new frame.
+    std::shared_ptr<msc::hud::PoseFeed> poses_;
+    msc::hud::HudOverlay overlay_;
+    std::uint64_t shownSequence_ = 0;
+    msc::Nanoseconds shownCapture_{0};
 
     // REQ-VID-002: timings along the path, and where the statistics go.
     msc::video::PresentationTracker tracker_;
@@ -86,6 +104,10 @@ private:
     std::unique_ptr<QRhiSampler> sampler_;
     std::unique_ptr<QRhiShaderResourceBindings> bindings_;
     std::unique_ptr<QRhiGraphicsPipeline> pipeline_;
+    std::unique_ptr<QRhiBuffer> hudVertices_;
+    std::unique_ptr<QRhiBuffer> hudUniforms_;
+    std::unique_ptr<QRhiShaderResourceBindings> hudBindings_;
+    std::unique_ptr<QRhiGraphicsPipeline> hudPipeline_;
 };
 
 // Called on the render thread whenever the item's render target is (re)created: first show,
@@ -106,6 +128,7 @@ void VideoRenderer::initialize(QRhiCommandBuffer* cb) {
     }
     if (!pipeline_) {
         createPipeline(cb);
+        createHudPipeline(cb);
     }
 }
 
@@ -172,6 +195,56 @@ void VideoRenderer::createPipeline(QRhiCommandBuffer* cb) {
     }
 }
 
+// The overlay's own small pipeline: a quad around the marker, a ring drawn by the fragment
+// shader, blended over the picture.
+void VideoRenderer::createHudPipeline(QRhiCommandBuffer* cb) {
+    hudPipeline_.reset();
+    // Corners of the quad, -1 to 1. Not corrected for the backend here: the marker moves every
+    // frame, so its matrix (which includes the correction) is a uniform.
+    constexpr std::array<float, 8> corners{-1.0F, -1.0F, 1.0F, -1.0F, -1.0F, 1.0F, 1.0F, 1.0F};
+    hudVertices_.reset(rhi_->newBuffer(QRhiBuffer::Immutable, QRhiBuffer::VertexBuffer, sizeof(corners)));
+    hudVertices_->create();
+    QRhiResourceUpdateBatch* updates = rhi_->nextResourceUpdateBatch();
+    updates->uploadStaticBuffer(hudVertices_.get(), corners.data());
+    cb->resourceUpdate(updates);
+
+    hudUniforms_.reset(rhi_->newBuffer(QRhiBuffer::Dynamic, QRhiBuffer::UniformBuffer, sizeof(HudUniforms)));
+    hudUniforms_->create();
+    hudBindings_.reset(rhi_->newShaderResourceBindings());
+    hudBindings_->setBindings({QRhiShaderResourceBinding::uniformBuffer(
+        0, QRhiShaderResourceBinding::VertexStage | QRhiShaderResourceBinding::FragmentStage,
+        hudUniforms_.get())});
+    hudBindings_->create();
+
+    auto pipeline = std::unique_ptr<QRhiGraphicsPipeline>(rhi_->newGraphicsPipeline());
+    pipeline->setTopology(QRhiGraphicsPipeline::TriangleStrip);
+    pipeline->setSampleCount(sampleCount_);
+    pipeline->setShaderStages({
+        {QRhiShaderStage::Vertex, loadShader(QStringLiteral(":/shaders/hud.vert.qsb"))},
+        {QRhiShaderStage::Fragment, loadShader(QStringLiteral(":/shaders/hud.frag.qsb"))},
+    });
+    // Ordinary "over" blending for the colour. The alpha written stays 1: the item is opaque,
+    // and Qt Quick composes it into the window by that alpha.
+    QRhiGraphicsPipeline::TargetBlend blend;
+    blend.enable = true;
+    blend.srcColor = QRhiGraphicsPipeline::SrcAlpha;
+    blend.dstColor = QRhiGraphicsPipeline::OneMinusSrcAlpha;
+    blend.srcAlpha = QRhiGraphicsPipeline::One;
+    blend.dstAlpha = QRhiGraphicsPipeline::OneMinusSrcAlpha;
+    pipeline->setTargetBlends({blend});
+    QRhiVertexInputLayout layout;
+    layout.setBindings({{2 * sizeof(float)}});
+    layout.setAttributes({{0, 0, QRhiVertexInputAttribute::Float2, 0}});
+    pipeline->setVertexInputLayout(layout);
+    pipeline->setShaderResourceBindings(hudBindings_.get());
+    pipeline->setRenderPassDescriptor(renderTarget()->renderPassDescriptor());
+    if (!pipeline->create()) {
+        qWarning("VideoItem: could not create the overlay's pipeline; the video is shown without it");
+        return;
+    }
+    hudPipeline_ = std::move(pipeline);
+}
+
 // GUI thread blocked, render thread running: the only moment both sides may be touched.
 void VideoRenderer::synchronize(QQuickRhiItem* item) {
     auto* video = static_cast<VideoItem*>(item);
@@ -182,8 +255,10 @@ void VideoRenderer::synchronize(QQuickRhiItem* item) {
         clock_ = video->clock_;
         hasFrame_ = false;
         tracker_.reset();
+        overlay_.forgetFrame();  // the new source's frame numbers start again
         video->channel_->newestCapture.store(VideoStatsChannel::kNoFrame, std::memory_order_relaxed);
     }
+    poses_ = video->poses_;
     channel_ = video->channel_;
 
     // frameSwapped is emitted on the render thread after the swap: the "present" timestamp.
@@ -240,7 +315,67 @@ void VideoRenderer::uploadFrame(const Frame& frame, QRhiResourceUpdateBatch* upd
     updates->uploadTexture(texture_.get(), QRhiTextureUploadDescription({0, 0, image}));
 }
 
+// Decides whether the frame on screen gets a marker (REQ-HUD-001: only if the arm's pose at the
+// frame's capture time is known) and, if so, where: the same projection the camera used, into
+// the same letterbox rectangle `box` the picture is drawn in.
+bool VideoRenderer::prepareHud(const msc::video::PixelRect& box, QRhiResourceUpdateBatch*& updates) {
+    using msc::hud::HudMode;
+    using msc::hud::HudState;
+    const HudMode mode = channel_ ? channel_->hudMode.load(std::memory_order_relaxed) : HudMode::Off;
+    msc::hud::HudMarker marker;
+    if (mode == HudMode::Off) {
+        marker.state = HudState::Off;
+    } else if (!hasFrame_ || clock_ == nullptr || box.width == 0 || box.height == 0) {
+        marker.state = HudState::Stale;  // no picture: nothing to put a marker on
+    } else {
+        const double aspect = static_cast<double>(texture_->pixelSize().width()) /
+                              static_cast<double>(texture_->pixelSize().height());
+        marker = overlay_.markerFor(shownSequence_, shownCapture_, clock_->now(), aspect, mode);
+    }
+    if (channel_) {
+        channel_->hudState.store(marker.state, std::memory_order_relaxed);
+    }
+    if (!marker.shown() || !hudPipeline_) {
+        return false;
+    }
+
+    // The quad: the ring plus one pixel of soft edge, as a fraction of the picture's width.
+    const double pixel = 1.0 / static_cast<double>(box.width);
+    const double outer = marker.radius + (marker.thickness / 2.0);
+    const double inner = marker.radius - (marker.thickness / 2.0);
+    const double half = outer + (2.0 * pixel);
+    // The viewport is the picture, so the picture's corners are at -1 and 1 (y up, as the
+    // video quad is written). Widths are fractions of the picture's width, which is 2 units
+    // across; the same length is `aspect` times as many units of the height.
+    const double boxAspect = static_cast<double>(box.width) / static_cast<double>(box.height);
+    QMatrix4x4 transform = rhi_->clipSpaceCorrMatrix();
+    transform.translate(static_cast<float>((2.0 * marker.centre.x) - 1.0),
+                        static_cast<float>(1.0 - (2.0 * marker.centre.y)));
+    transform.scale(static_cast<float>(2.0 * half), static_cast<float>(2.0 * half * boxAspect));
+
+    const auto& rgb = mode == HudMode::Naive ? msc::hud::kHudNaiveColour : msc::hud::kHudSyncedColour;
+    HudUniforms uniforms{};
+    std::copy_n(transform.constData(), 16, uniforms.transform.begin());
+    uniforms.colour = {static_cast<float>(rgb[0]) / 255.0F, static_cast<float>(rgb[1]) / 255.0F,
+                       static_cast<float>(rgb[2]) / 255.0F, 1.0F};
+    uniforms.ring = {static_cast<float>(inner / half), static_cast<float>(outer / half),
+                     static_cast<float>(pixel / half), 0.0F};
+    if (updates == nullptr) {
+        updates = rhi_->nextResourceUpdateBatch();
+    }
+    updates->updateDynamicBuffer(hudUniforms_.get(), 0, sizeof(uniforms), &uniforms);
+    return true;
+}
+
 void VideoRenderer::render(QRhiCommandBuffer* cb) {
+    // Every pose the arm link has sent since the last draw, in order, into the history.
+    if (poses_) {
+        msc::hud::TimedPose pose;
+        while (poses_->next(pose)) {
+            overlay_.addPose(pose);
+        }
+    }
+
     QRhiResourceUpdateBatch* updates = nullptr;
     // Exactly one acquire per rendered frame (ADR 0002): the frame stays valid until the next.
     if (pipeline_ && source_ && source_->acquireLatest()) {
@@ -250,6 +385,8 @@ void VideoRenderer::render(QRhiCommandBuffer* cb) {
             updates = rhi_->nextResourceUpdateBatch();
             uploadFrame(frame, updates);
             hasFrame_ = true;
+            shownSequence_ = frame.sequence;
+            shownCapture_ = frame.captureTime;
             if (clock_ != nullptr) {
                 tracker_.frameUploaded(frame.sequence, frame.captureTime, clock_->now());
             }
@@ -261,12 +398,19 @@ void VideoRenderer::render(QRhiCommandBuffer* cb) {
         }
     }
 
-    cb->beginPass(renderTarget(), kBarColour, {1.0F, 0}, updates);
+    // Where the picture goes in the item, and the overlay with it: one rectangle for both.
+    msc::video::PixelRect box;
     if (hasFrame_) {
         const QSize target = renderTarget()->pixelSize();
         const QSize image = texture_->pixelSize();
-        const msc::video::PixelRect box = msc::video::letterbox(
-            pixels(image.width()), pixels(image.height()), pixels(target.width()), pixels(target.height()));
+        box = msc::video::letterbox(pixels(image.width()), pixels(image.height()), pixels(target.width()),
+                                    pixels(target.height()));
+    }
+    const bool drawHud = prepareHud(box, updates);
+
+    cb->beginPass(renderTarget(), kBarColour, {1.0F, 0}, updates);
+    if (hasFrame_) {
+        const QSize target = renderTarget()->pixelSize();
         // QRhiViewport counts y from the bottom (OpenGL style); PixelRect counts from the top.
         const std::uint32_t fromBottom = pixels(target.height()) - box.y - box.height;
         cb->setGraphicsPipeline(pipeline_.get());
@@ -276,6 +420,16 @@ void VideoRenderer::render(QRhiCommandBuffer* cb) {
         const QRhiCommandBuffer::VertexInput input(vertices_.get(), 0);
         cb->setVertexInput(0, 1, &input);
         cb->draw(4);
+
+        // The marker, in the same pass and the same viewport as the frame it was computed for:
+        // the two reach the screen together or not at all.
+        if (drawHud) {
+            cb->setGraphicsPipeline(hudPipeline_.get());
+            cb->setShaderResources();
+            const QRhiCommandBuffer::VertexInput hudInput(hudVertices_.get(), 0);
+            cb->setVertexInput(0, 1, &hudInput);
+            cb->draw(4);
+        }
     }
     cb->endPass();
 
@@ -316,6 +470,11 @@ void VideoItem::checkVideoSignal() {
         videoState_ = state;
         emit videoStateChanged();
     }
+    // The overlay's state for the frame on screen, on the same timer.
+    if (const msc::hud::HudState hud = channel_->hudState.load(std::memory_order_relaxed); hud != hudState_) {
+        hudState_ = hud;
+        emit hudChanged();
+    }
     // Only the frozen banner shows the age; no need to wake QML 20 times a second otherwise.
     if (state != VideoState::Live || frameAgeMs_ != 0.0) {
         frameAgeMs_ = state == VideoState::Live ? 0.0 : age;
@@ -329,6 +488,33 @@ void VideoItem::setSourceStatus(const QString& status) {
     }
     sourceStatus_ = status;
     emit sourceStatusChanged();
+}
+
+void VideoItem::setPoseFeed(std::shared_ptr<msc::hud::PoseFeed> poses) {
+    poses_ = std::move(poses);
+    update();  // synchronize() hands it to the renderer
+}
+
+void VideoItem::setHudMode(HudMode mode) {
+    const auto wanted = static_cast<msc::hud::HudMode>(mode);
+    if (wanted == hudMode_) {
+        return;
+    }
+    hudMode_ = wanted;
+    channel_->hudMode.store(wanted, std::memory_order_relaxed);
+    emit hudChanged();
+}
+
+QString VideoItem::hudStatus() const {
+    using msc::hud::HudMode;
+    if (hudMode_ == HudMode::Off) {
+        return tr("off");
+    }
+    if (hudState_ == msc::hud::HudState::Shown) {
+        return hudMode_ == HudMode::Synced ? tr("on the picture's own time")
+                                           : tr("naive: newest pose, not the picture's");
+    }
+    return tr("hidden: %1").arg(QString::fromLatin1(msc::hud::toString(hudState_)));
 }
 
 void VideoItem::setFrameSource(std::shared_ptr<FrameSource> source, const msc::Clock& clock) {

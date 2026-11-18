@@ -2,6 +2,8 @@
 
 #include "msc/common/clock.hpp"
 #include "msc/common/latest_value.hpp"
+#include "msc/hud/hud_overlay.hpp"
+#include "msc/hud/pose_feed.hpp"
 #include "msc/video/frame_source.hpp"
 #include "msc/video/presentation_tracker.hpp"
 #include "msc/video/video_signal.hpp"
@@ -34,6 +36,10 @@ struct VideoStatsChannel {
     // every new frame, not every 250 ms like the statistics, so the frozen-picture watchdog
     // reacts within its own period instead of waiting for the next statistics.
     std::atomic<std::int64_t> newestCapture{kNoFrame};  // render thread -> GUI thread
+    // The overlay (M5.3): which mode the operator chose, and what the renderer did with it for
+    // the frame on screen (drawn, or why not).
+    std::atomic<msc::hud::HudMode> hudMode{msc::hud::HudMode::Synced};     // GUI thread -> render thread
+    std::atomic<msc::hud::HudState> hudState{msc::hud::HudState::NoData};  // render thread -> GUI thread
 };
 
 // Shows the newest frame of a FrameSource, scaled to fit at its own aspect ratio (black bars
@@ -46,6 +52,11 @@ struct VideoStatsChannel {
 //     times every frame along the path (capture, upload, present) for REQ-VID-002.
 //   The source goes to the renderer in synchronize(), while the GUI thread is blocked (Qt's
 //   safe meeting point); statistics come back through a VideoStatsChannel.
+//
+// The overlay (M5.3) is drawn by the same renderer, in the same render pass as the frame: for
+// the frame it is about to draw it asks where the arm was when that frame was captured, and
+// draws the marker there, or nothing (REQ-HUD-001). A QML item on top could not do this: its
+// position would be set on the GUI thread, for whatever frame the render thread shows next.
 //
 // The item renders continuously (every vsync) while it has a source: a video view has a new
 // picture nearly every frame, so there is nothing to gain from waiting to be asked.
@@ -72,6 +83,12 @@ class VideoItem : public QQuickRhiItem {
     // "camera disconnected"). Set by whoever owns the source.
     Q_PROPERTY(QString sourceStatus READ sourceStatus WRITE setSourceStatus NOTIFY sourceStatusChanged FINAL)
 
+    // The overlay: how the marker's position is chosen, and what happened for the frame on
+    // screen ("on the picture's own time", "hidden: no arm data for the picture on screen", ...).
+    Q_PROPERTY(HudMode hudMode READ hudMode WRITE setHudMode NOTIFY hudChanged FINAL)
+    Q_PROPERTY(bool hudShown READ hudShown NOTIFY hudChanged FINAL)
+    Q_PROPERTY(QString hudStatus READ hudStatus NOTIFY hudChanged FINAL)
+
 public:
     enum class VideoState : std::uint8_t {
         Waiting = static_cast<std::uint8_t>(msc::video::VideoSignal::Waiting),
@@ -79,6 +96,13 @@ public:
         Frozen = static_cast<std::uint8_t>(msc::video::VideoSignal::Frozen),
     };
     Q_ENUM(VideoState)
+
+    enum class HudMode : std::uint8_t {
+        HudSynced = static_cast<std::uint8_t>(msc::hud::HudMode::Synced),
+        HudNaive = static_cast<std::uint8_t>(msc::hud::HudMode::Naive),
+        HudOff = static_cast<std::uint8_t>(msc::hud::HudMode::Off),
+    };
+    Q_ENUM(HudMode)
 
     explicit VideoItem(QQuickItem* parent = nullptr);
 
@@ -89,6 +113,10 @@ public:
     [[nodiscard]] const std::shared_ptr<msc::video::FrameSource>& frameSource() const noexcept {
         return source_;
     }
+
+    // GUI thread. Where the arm's poses come from, for the overlay. The renderer becomes the
+    // feed's one "every pose" reader.
+    void setPoseFeed(std::shared_ptr<msc::hud::PoseFeed> poses);
 
     // GUI thread. The statistics as of the last refresh (at most a quarter second old).
     [[nodiscard]] const msc::video::PresentationStats& stats() const noexcept { return stats_; }
@@ -109,17 +137,24 @@ public:
     [[nodiscard]] const QString& sourceStatus() const noexcept { return sourceStatus_; }
     void setSourceStatus(const QString& status);
 
+    [[nodiscard]] HudMode hudMode() const noexcept { return static_cast<HudMode>(hudMode_); }
+    void setHudMode(HudMode mode);
+    [[nodiscard]] msc::hud::HudState hudState() const noexcept { return hudState_; }
+    [[nodiscard]] bool hudShown() const noexcept { return hudState_ == msc::hud::HudState::Shown; }
+    [[nodiscard]] QString hudStatus() const;
+
 signals:
     void statsChanged();
     void videoStateChanged();
     void frameAgeChanged();
     void sourceStatusChanged();
+    void hudChanged();
 
 protected:
     QQuickRhiItemRenderer* createRenderer() override;
 
 private:
-    friend class VideoRenderer;  // reads source_, clock_ and channel_, in synchronize() only
+    friend class VideoRenderer;  // reads source_, poses_, clock_ and channel_, in synchronize() only
 
     // 0 when there is no sample yet; QML checks latencySamples first.
     static double toMs(const std::optional<msc::Nanoseconds>& t) noexcept {
@@ -128,6 +163,7 @@ private:
     void checkVideoSignal();
 
     std::shared_ptr<msc::video::FrameSource> source_;
+    std::shared_ptr<msc::hud::PoseFeed> poses_;
     const msc::Clock* clock_ = nullptr;
     std::shared_ptr<VideoStatsChannel> channel_ = std::make_shared<VideoStatsChannel>();
     msc::video::PresentationStats stats_;  // GUI thread's copy, read from channel_
@@ -136,4 +172,6 @@ private:
     VideoState videoState_ = VideoState::Waiting;
     double frameAgeMs_ = 0.0;
     QString sourceStatus_;
+    msc::hud::HudMode hudMode_ = msc::hud::HudMode::Synced;
+    msc::hud::HudState hudState_ = msc::hud::HudState::NoData;  // GUI thread's copy, from channel_
 };

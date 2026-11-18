@@ -83,6 +83,12 @@ its entry point, drawn where the arm's telemetry says it is at the moment each f
 `--video-delay=MS` (0 to 150) delivers every frame that long after capture, like a real camera
 chain; the latency figures show it.
 
+The overlay (M5) is the ring around the instrument's tip. It is drawn where the arm was when the
+frame on screen was captured, in the video's own render pass, and not at all when that is not
+known (REQ-HUD-001): try the `link` chip. H (or `--hud=synced|naive|off`) switches to a naive
+overlay that uses the newest pose instead: with `--video-delay=80` and the arm moving, the yellow
+ring runs ahead of the instrument.
+
 Fault injector (testing): the chips at the right of the status bar turn a fault on and off
 (`link` = cable pulled, `corrupt` = one bit flipped in every packet to the arm, `hand` = hand
 controller frozen, `video` = video stopped, `fault` = generic). Scripted:

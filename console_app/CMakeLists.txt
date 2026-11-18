@@ -37,7 +37,9 @@ qt_add_shaders(console_app "video_shaders"
     PREFIX "/"
     FILES
         shaders/video.vert
-        shaders/video.frag)
+        shaders/video.frag
+        shaders/hud.vert
+        shaders/hud.frag)
 
 target_include_directories(console_app PRIVATE src)
 # GuiPrivate: QRhi (<rhi/qrhi.h>) is public API since Qt 6.6 but, with a weaker compatibility
