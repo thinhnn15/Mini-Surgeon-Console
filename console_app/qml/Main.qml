@@ -69,6 +69,11 @@ Window {
                 teleop.disengage();
             } else if (event.key === Qt.Key_R) {
                 teleop.reset();
+            } else if (event.key === Qt.Key_H) {
+                // The overlay: synchronised -> naive -> off -> synchronised.
+                video.hudMode = video.hudMode === VideoItem.HudSynced ? VideoItem.HudNaive
+                              : video.hudMode === VideoItem.HudNaive ? VideoItem.HudOff
+                              : VideoItem.HudSynced;
             }
         }
         Keys.onReleased: event => {
@@ -351,6 +356,16 @@ Window {
                 color: teleop.armState === "holding" ? "#f0b429" : "#9aa7b4"
                 font.pixelSize: 15
             }
+            Text {
+                // The overlay (M5.3): the ring around the instrument's tip. When it is hidden
+                // the reason is here, so a missing ring is never a mystery (REQ-HUD-001).
+                width: panel.width
+                text: qsTr("Overlay (H): %1").arg(video.hudStatus)
+                wrapMode: Text.Wrap
+                color: video.hudShown ? (video.hudMode === VideoItem.HudNaive ? "#ffd600" : "#00e5ff")
+                                      : "#9aa7b4"
+                font.pixelSize: 15
+            }
 
             // Video timing (REQ-VID-002). Here, not over the picture: nothing should cover
             // the surgeon's view (and the test pattern's barcode must stay readable).
@@ -407,7 +422,7 @@ Window {
                 left: parent.left
                 leftMargin: 12
             }
-            text: qsTr("M4 teleoperation · v%1 · Space clutch · E engage · Esc disengage · R reset")
+            text: qsTr("M5 overlay · v%1 · Space clutch · E engage · Esc disengage · R reset · H overlay")
                       .arg(Qt.application.version)
             color: "#6b7a89"
             font.pixelSize: 13

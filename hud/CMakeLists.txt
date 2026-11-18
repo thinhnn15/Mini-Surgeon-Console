@@ -1,6 +1,7 @@
 # The overlay's logic (M5): where the arm was at the time a video frame was captured, and
 # whether that is known at all. Plain C++, no Qt, so REQ-HUD-001 is tested without a window.
 add_library(msc_hud STATIC
+    src/hud_overlay.cpp
     src/pose_history.cpp
     src/tool_camera.cpp)
 add_library(msc::hud ALIAS msc_hud)
@@ -12,6 +13,7 @@ msc_set_warnings(msc_hud)
 
 if(BUILD_TESTING)
     add_executable(msc_hud_tests
+        tests/hud_overlay_test.cpp
         tests/pose_feed_test.cpp
         tests/pose_history_test.cpp
         tests/tool_camera_test.cpp)

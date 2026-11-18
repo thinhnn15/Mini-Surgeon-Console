@@ -236,6 +236,21 @@ int main(int argc, char* argv[]) {
         return 1;
     }
     video->setFrameSource(source, clock);
+    video->setPoseFeed(poses);
+    // --hud=synced (default) | naive | off: how the overlay's marker is placed (M5.3). Also
+    // switched with H in the window.
+    if (const std::optional<QString> hud = optionValue(args, QStringLiteral("--hud"))) {
+        if (*hud == QLatin1String("synced")) {
+            video->setHudMode(VideoItem::HudMode::HudSynced);
+        } else if (*hud == QLatin1String("naive")) {
+            video->setHudMode(VideoItem::HudMode::HudNaive);
+        } else if (*hud == QLatin1String("off")) {
+            video->setHudMode(VideoItem::HudMode::HudOff);
+        } else {
+            qCritical("console_app: --hud must be \"synced\", \"naive\" or \"off\"");
+            return 1;
+        }
+    }
     if (auto* teleopModel = window->findChild<TeleopModel*>(QStringLiteral("teleop"));
         teleopModel != nullptr && teleop) {
         teleopModel->setCore(&*teleop, &clock, args.contains(QStringLiteral("--hand-demo")));
