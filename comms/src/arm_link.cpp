@@ -15,8 +15,8 @@ namespace msc::comms {
 ArmLink::ArmLink(const Clock& clock, UdpSocket socket, ArmLinkConfig config)
     : clock_(&clock),
       socket_(std::move(socket)),
-      config_(config),
-      heartbeat_(config.heartbeatPeriod, config.missedHeartbeats),
+      config_(std::move(config)),
+      heartbeat_(config_.heartbeatPeriod, config_.missedHeartbeats),  // config_: `config` was moved from
       session_(newSessionId()) {}
 
 ArmLink::~ArmLink() {
@@ -112,13 +112,18 @@ void ArmLink::handle(const ReceiveResult& received, std::span<const std::byte> b
         return;
     }
     current_.lost = fromArm_.stats().lost;
+    const Nanoseconds now = clock_->now();  // arrival on our clock, not the arm's timestamp
     if (std::holds_alternative<Heartbeat>(packet.message)) {
-        heartbeat_.received(clock_->now());  // arrival on our clock, not the arm's timestamp
+        heartbeat_.received(now);
         ++current_.heartbeatsReceived;
     } else if (const auto* telemetry = std::get_if<JointTelemetry>(&packet.message)) {
         current_.telemetry = *telemetry;
         current_.telemetrySeen = true;
         ++current_.telemetryReceived;
+        if (config_.onTelemetry) {
+            config_.onTelemetry(
+                TelemetrySample{.receivedAt = now, .armTime = packet.timestamp, .telemetry = *telemetry});
+        }
     }
 }
 

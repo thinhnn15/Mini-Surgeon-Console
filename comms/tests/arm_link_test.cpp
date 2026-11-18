@@ -1,12 +1,14 @@
 #include "msc/comms/arm_link.hpp"
 
 #include "msc/common/clock.hpp"
+#include "msc/common/spsc_queue.hpp"
 #include "msc/comms/protocol.hpp"
 #include "msc/comms/udp_socket.hpp"
 
 #include <gtest/gtest.h>
 
 #include <array>
+#include <atomic>
 #include <chrono>
 #include <cstddef>
 #include <cstdlib>
@@ -16,6 +18,7 @@
 #include <thread>
 #include <utility>
 #include <variant>
+#include <vector>
 
 namespace msc::comms {
 namespace {
@@ -162,6 +165,89 @@ TEST(ArmLink, ReportsTheArmsTelemetry) {
     ASSERT_TRUE(status.telemetrySeen);
     EXPECT_EQ(status.telemetry, sent);
     EXPECT_EQ(status.telemetryReceived, 1U);
+}
+
+// M5.1: whoever needs every telemetry sample (the overlay's pose history) gets each one, in
+// order, with the time it arrived on the console's clock. The sink runs on the link thread, so
+// it hands over through a lock-free queue, as the console does.
+TEST(ArmLink, HandsEveryTelemetryPacketToTheSinkWithItsArrivalTime) {
+    const SteadyClock clock;
+    FakeArm arm;
+    SpscQueue<TelemetrySample> received(64);
+    ArmLink link(
+        clock, openLoopback(),
+        ArmLinkConfig{.arm = arm.endpoint(), .onTelemetry = [&received](const TelemetrySample& sample) {
+                          static_cast<void>(received.tryPush(sample));
+                      }});
+    link.start();
+
+    const Nanoseconds before = clock.now();
+    constexpr int kPackets = 5;
+    for (int i = 1; i <= kPackets; ++i) {
+        arm.send(link.localEndpoint(), JointTelemetry{.position = all(0.1F * static_cast<float>(i)),
+                                                      .velocity = all(0.0F),
+                                                      .state = ArmState::Following,
+                                                      .lastCommandSequence = 0});
+        std::this_thread::sleep_for(2ms);
+    }
+    // Heartbeats in between must not reach the sink.
+    arm.send(link.localEndpoint(), Heartbeat{});
+
+    std::vector<TelemetrySample> samples;
+    const auto giveUp = Steady::now() + 2s;
+    while (Steady::now() < giveUp && samples.size() < kPackets) {
+        TelemetrySample sample;
+        if (received.tryPop(sample)) {
+            samples.push_back(sample);
+        } else {
+            std::this_thread::sleep_for(1ms);
+        }
+    }
+    std::this_thread::sleep_for(30ms);  // anything that should not have come would be here by now
+    const Nanoseconds after = clock.now();
+    link.stop();
+
+    ASSERT_EQ(samples.size(), static_cast<std::size_t>(kPackets));
+    TelemetrySample extra;
+    EXPECT_FALSE(received.tryPop(extra)) << "the heartbeat, or a packet twice, reached the sink";
+    Nanoseconds previous = before;
+    for (int i = 0; i < kPackets; ++i) {
+        const TelemetrySample& sample = samples[static_cast<std::size_t>(i)];
+        EXPECT_EQ(sample.telemetry.position, all(0.1F * static_cast<float>(i + 1))) << "packet " << i + 1;
+        EXPECT_GE(sample.receivedAt, previous) << "arrival times must not go backwards";
+        EXPECT_LE(sample.receivedAt, after);
+        previous = sample.receivedAt;
+    }
+}
+
+// The cable-pulled fault throws away everything that arrives: the sink must see none of it, or
+// the overlay would keep following an arm the console no longer hears.
+TEST(ArmLink, WithTheCablePulledNothingReachesTheSink) {
+    const SteadyClock clock;
+    FakeArm arm;
+    std::atomic<int> calls{0};
+    ArmLink link(clock, openLoopback(),
+                 ArmLinkConfig{.arm = arm.endpoint(), .onTelemetry = [&calls](const TelemetrySample&) {
+                                   calls.fetch_add(1, std::memory_order_relaxed);
+                               }});
+    link.setFault(LinkFault::Drop);
+    link.start();
+    for (int i = 0; i < 5; ++i) {
+        arm.send(link.localEndpoint(), JointTelemetry{});
+        std::this_thread::sleep_for(5ms);
+    }
+    std::this_thread::sleep_for(30ms);
+    EXPECT_EQ(calls.load(), 0);
+
+    // Plugged back in: the next packet arrives.
+    link.setFault(LinkFault::None);
+    const auto giveUp = Steady::now() + 2s;
+    while (Steady::now() < giveUp && calls.load() == 0) {
+        arm.send(link.localEndpoint(), JointTelemetry{});
+        std::this_thread::sleep_for(5ms);
+    }
+    link.stop();
+    EXPECT_GT(calls.load(), 0);
 }
 
 TEST(ArmLink, StopEndsTheHeartbeats) {
