@@ -4,7 +4,8 @@ find_package(Threads REQUIRED)
 
 add_library(msc_video STATIC
     src/test_pattern.cpp
-    src/synthetic_source.cpp)
+    src/synthetic_source.cpp
+    src/presentation_tracker.cpp)
 add_library(msc::video ALIAS msc_video)
 
 target_include_directories(msc_video PUBLIC include)
@@ -18,7 +19,8 @@ if(BUILD_TESTING)
     add_executable(msc_video_tests
         tests/test_pattern_test.cpp
         tests/synthetic_source_test.cpp
-        tests/letterbox_test.cpp)
+        tests/letterbox_test.cpp
+        tests/presentation_tracker_test.cpp)
     target_link_libraries(msc_video_tests PRIVATE msc::video GTest::gtest_main)
     msc_set_warnings(msc_video_tests)
     gtest_discover_tests(msc_video_tests)
