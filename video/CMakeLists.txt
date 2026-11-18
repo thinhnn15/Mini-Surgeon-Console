@@ -6,7 +6,8 @@ add_library(msc_video STATIC
     src/test_pattern.cpp
     src/synthetic_source.cpp
     src/presentation_tracker.cpp
-    src/pixel_convert.cpp)
+    src/pixel_convert.cpp
+    src/scene.cpp)
 add_library(msc::video ALIAS msc_video)
 
 target_include_directories(msc_video PUBLIC include)
@@ -20,7 +21,8 @@ if(BUILD_TESTING)
         tests/letterbox_test.cpp
         tests/presentation_tracker_test.cpp
         tests/pixel_convert_test.cpp
-        tests/video_signal_test.cpp)
+        tests/video_signal_test.cpp
+        tests/scene_test.cpp)
     target_link_libraries(msc_video_tests PRIVATE msc::video GTest::gtest_main)
     msc_set_warnings(msc_video_tests)
     gtest_discover_tests(msc_video_tests)

@@ -27,6 +27,10 @@ inline constexpr std::uint32_t kBarcodeBits = 32;
 inline constexpr std::uint32_t kMinPatternWidth = kBarcodeBits * 2;
 inline constexpr std::uint32_t kMinPatternHeight = 32;
 
+// Height of the barcode strip at the top of a frame this high, in rows. Anything drawn over
+// the pattern afterwards (the instrument, M5.2) must stay below it.
+[[nodiscard]] std::uint32_t barcodeRows(std::uint32_t frameHeight) noexcept;
+
 // Draws the pattern for `sequence` into `frame` and sets frame.sequence. The frame's
 // width and height must already be set and be at least the minimum; the pixel buffer is
 // resized only if it does not match (so a reused frame is not reallocated).

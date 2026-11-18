@@ -1,5 +1,7 @@
 #include "teleop_model.hpp"
 
+#include "msc/common/fine_timer.hpp"
+
 #include <QtGlobal>
 
 #include <chrono>
@@ -18,7 +20,7 @@ constexpr auto kHandPeriod = 10ms;
 constexpr int kRefreshEvery = 5;
 // Pad edge to edge is ±0.8 rad of hand motion (±0.4 rad at the arm, scale 0.5).
 constexpr double kHandRange = 0.8;
-// The scripted hand: joints 1 and 2 trace a slow ellipse, 10 s per turn.
+// The scripted hand: joints 1 and 2 trace a slow figure of eight, 10 s per turn.
 constexpr double kDemoPeriodSeconds = 10.0;
 
 }  // namespace
@@ -33,7 +35,9 @@ void TeleopModel::setCore(msc::teleop::TeleopCore* core, const msc::Clock* clock
     core_ = core;
     clock_ = clock;
     demo_ = demo;
-    demoStart_ = std::chrono::steady_clock::now();
+    if (demo_) {
+        scriptedHand_ = std::jthread([this](const std::stop_token& stop) { runScriptedHand(stop); });
+    }
     timer_.start();
     emit changed();
 }
@@ -43,23 +47,21 @@ void TeleopModel::tick() {
         return;
     }
     if (demo_) {
-        const double t = std::chrono::duration<double>(std::chrono::steady_clock::now() - demoStart_).count();
-        const double phase = 2.0 * std::numbers::pi * t / kDemoPeriodSeconds;
-        handX_ = 0.8 * std::sin(phase);
-        handY_ = 0.5 * std::sin(2.0 * phase);
+        // The scripted hand reports to the core from its own thread; here only the pad's dot
+        // follows it, and the engage request is made once the core allows it.
+        handX_ = scriptedX_.load(std::memory_order_relaxed);
+        handY_ = scriptedY_.load(std::memory_order_relaxed);
         emit handChanged();
         if (!demoEngaged_ && hasStatus_ && status_.engageAllowed) {
             demoEngaged_ = true;
             request(msc::teleop::Request::Engage);
         }
-    }
-
-    msc::teleop::HandSample sample;
-    sample.pose[0] = static_cast<float>(handX_ * kHandRange);
-    sample.pose[1] = static_cast<float>(handY_ * kHandRange);
-    sample.clutch = clutch_;
-    sample.time = clock_->now();
-    if (!stalled_) {
+    } else if (!stalled_.load(std::memory_order_relaxed)) {
+        msc::teleop::HandSample sample;
+        sample.pose[0] = static_cast<float>(handX_ * kHandRange);
+        sample.pose[1] = static_cast<float>(handY_ * kHandRange);
+        sample.clutch = clutch_.load(std::memory_order_relaxed);
+        sample.time = clock_->now();
         core_->submitHand(sample);
     }
 
@@ -69,6 +71,33 @@ void TeleopModel::tick() {
             hasStatus_ = true;
             emit changed();
         }
+    }
+}
+
+// The scripted hand (--hand-demo): joints 1 and 2 trace a slow figure of eight. A thread of
+// its own, paced like the other fixed-rate loops, so it is the core's only hand producer in
+// this mode and reports every 10 ms whatever the GUI thread is doing.
+void TeleopModel::runScriptedHand(const std::stop_token& stop) {
+    [[maybe_unused]] const msc::FineTimerResolution fineTimer;
+    const auto start = std::chrono::steady_clock::now();
+    auto next = start;
+    while (!stop.stop_requested()) {
+        const double t = std::chrono::duration<double>(std::chrono::steady_clock::now() - start).count();
+        const double phase = 2.0 * std::numbers::pi * t / kDemoPeriodSeconds;
+        const double x = 0.8 * std::sin(phase);
+        const double y = 0.5 * std::sin(2.0 * phase);
+        scriptedX_.store(x, std::memory_order_relaxed);
+        scriptedY_.store(y, std::memory_order_relaxed);
+        if (!stalled_.load(std::memory_order_relaxed)) {
+            msc::teleop::HandSample sample;
+            sample.pose[0] = static_cast<float>(x * kHandRange);
+            sample.pose[1] = static_cast<float>(y * kHandRange);
+            sample.clutch = clutch_.load(std::memory_order_relaxed);
+            sample.time = clock_->now();
+            core_->submitHand(sample);
+        }
+        next += kHandPeriod;
+        msc::sleepUntil(next);
     }
 }
 
@@ -91,8 +120,8 @@ void TeleopModel::reset() {
 }
 
 void TeleopModel::setClutch(bool held) {
-    if (held != clutch_) {
-        clutch_ = held;
+    if (held != clutch_.load(std::memory_order_relaxed)) {
+        clutch_.store(held, std::memory_order_relaxed);
         emit handChanged();
     }
 }

@@ -5,8 +5,10 @@
 
 #include <chrono>
 #include <condition_variable>
+#include <cstddef>
 #include <mutex>
 #include <stdexcept>
+#include <utility>
 
 namespace msc::video {
 
@@ -21,13 +23,24 @@ Frame makeInitialFrame(const SyntheticSourceConfig& config) {
     if (config.period <= Nanoseconds::zero()) {
         throw std::invalid_argument("SyntheticSource: period must be positive");
     }
+    if (config.delay < Nanoseconds::zero()) {
+        throw std::invalid_argument("SyntheticSource: delay must not be negative");
+    }
     return Frame::allocate(config.width, config.height);
+}
+
+// The delay in whole periods, rounded up: a frame is never delivered early.
+std::size_t delayTicksFor(const SyntheticSourceConfig& config) {
+    return static_cast<std::size_t>((config.delay + config.period - Nanoseconds{1}) / config.period);
 }
 
 }  // namespace
 
 SyntheticSource::SyntheticSource(const Clock& clock, SyntheticSourceConfig config)
-    : clock_(&clock), config_(config), buffer_(makeInitialFrame(config)) {}
+    : clock_(&clock),
+      config_(std::move(config)),
+      buffer_(makeInitialFrame(config_)),
+      waiting_(delayTicksFor(config_), Frame::allocate(config_.width, config_.height)) {}
 
 SyntheticSource::~SyntheticSource() {
     stop();
@@ -37,6 +50,10 @@ void SyntheticSource::start() {
     if (thread_.joinable()) {
         return;
     }
+    // Frames still waiting from before a stop are older than the delay by now: a camera that
+    // was switched off does not deliver what it saw before.
+    waitingNext_ = 0;
+    waitingCount_ = 0;
     thread_ = std::jthread([this](const std::stop_token& stop) { run(stop); });
 }
 
@@ -56,13 +73,40 @@ const Frame& SyntheticSource::latest() const noexcept {
     return buffer_.readSlot();
 }
 
-void SyntheticSource::produceOne() {
-    Frame& frame = buffer_.writeSlot();
+// The picture as it is at this instant: the time, the pattern, and whatever else is in view.
+void SyntheticSource::capture(Frame& frame) {
     frame.captureTime = clock_->now();
     renderTestPattern(frame, nextSequence_);
     ++nextSequence_;
-    buffer_.publish();
-    produced_.fetch_add(1, std::memory_order_relaxed);
+    if (config_.scene) {
+        config_.scene(frame);
+    }
+}
+
+void SyntheticSource::produceOne() {
+    if (waiting_.empty()) {
+        capture(buffer_.writeSlot());  // no delay: straight into the mailbox
+        buffer_.publish();
+        produced_.fetch_add(1, std::memory_order_relaxed);
+        return;
+    }
+
+    // Delivery goes by ticks, not by comparing times. "Deliver what is at least 80 ms old" at
+    // 60 fps means 5 ticks = 83.3 ms, with only 3.3 ms to spare: a tick that came 4 ms late
+    // made the frame captured there miss its turn, and the next tick delivered two at once
+    // (one shown, one dropped). Measured with the first version: 41 frames dropped in 6 s.
+    Frame& slot = waiting_[waitingNext_];
+    if (waitingCount_ == waiting_.size()) {
+        // The slot holds the frame captured N ticks ago: its turn. Swap, not copy: it goes
+        // into the mailbox's write slot, and the frame that was there becomes this slot.
+        std::swap(slot, buffer_.writeSlot());
+        buffer_.publish();
+        produced_.fetch_add(1, std::memory_order_relaxed);
+        --waitingCount_;
+    }
+    capture(slot);
+    ++waitingCount_;
+    waitingNext_ = (waitingNext_ + 1) % waiting_.size();
 }
 
 void SyntheticSource::run(const std::stop_token& stop) {
