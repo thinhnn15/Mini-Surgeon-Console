@@ -17,6 +17,7 @@ if(BUILD_TESTING)
         tests/crc32_test.cpp
         tests/clock_test.cpp
         tests/latest_value_test.cpp
+        tests/spsc_queue_test.cpp
         tests/triple_buffer_test.cpp
         tests/latency_stats_test.cpp)
     target_link_libraries(msc_common_tests PRIVATE msc::common GTest::gtest_main)

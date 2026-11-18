@@ -29,6 +29,7 @@ add_subdirectory(video)
 add_subdirectory(comms)
 add_subdirectory(arm_sim)
 add_subdirectory(teleop)
+add_subdirectory(hud)
 add_subdirectory(tools)
 
 if(MSC_BUILD_CONSOLE)

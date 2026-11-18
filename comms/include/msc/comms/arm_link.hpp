@@ -11,11 +11,29 @@
 #include <chrono>
 #include <cstddef>
 #include <cstdint>
+#include <functional>
 #include <span>
 #include <stop_token>
 #include <thread>
 
 namespace msc::comms {
+
+// One telemetry packet, as it arrived.
+struct TelemetrySample {
+    // When it arrived, on the console's clock. Later than when the arm measured it by the time
+    // on the wire (well under a millisecond on a LAN) and by however late the link thread woke.
+    Nanoseconds receivedAt{0};
+    // When the arm sent it, on the arm's clock. Another clock, with another zero: only
+    // differences between two of these mean anything.
+    Nanoseconds armTime{0};
+    JointTelemetry telemetry{};
+};
+
+// Called for every telemetry packet the link accepts, in the order the arm sent them. It runs
+// on the link thread, between two heartbeats: it must return at once and never block (push
+// into a lock-free queue, publish to a mailbox). ArmLinkStatus only has the newest telemetry
+// at each heartbeat; this is for whoever needs every sample (the overlay's pose history, M5).
+using TelemetrySink = std::function<void(const TelemetrySample&)>;
 
 struct ArmLinkConfig {
     Endpoint arm = Endpoint::loopback(47001);
@@ -23,6 +41,7 @@ struct ArmLinkConfig {
     // rate, or the link counts as lost after `missedHeartbeats` periods (as on the arm's side).
     Nanoseconds heartbeatPeriod = std::chrono::milliseconds(10);
     unsigned missedHeartbeats = 3;
+    TelemetrySink onTelemetry{};  // optional
 };
 
 // What the console knows about the arm. Trivially copyable: it crosses threads through a

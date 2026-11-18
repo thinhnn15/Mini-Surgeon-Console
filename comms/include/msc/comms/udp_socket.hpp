@@ -18,7 +18,7 @@ struct Endpoint {
     std::uint16_t port = 0;
 
     [[nodiscard]] static Endpoint loopback(std::uint16_t port) noexcept {
-        return Endpoint{{127, 0, 0, 1}, port};
+        return Endpoint{.address = {127, 0, 0, 1}, .port = port};
     }
     // "a.b.c.d:port". Nothing if it is not exactly that.
     [[nodiscard]] static std::optional<Endpoint> parse(std::string_view text);

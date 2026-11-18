@@ -18,4 +18,4 @@ Checks: >
   -readability-identifier-length,
   -readability-redundant-member-init
 WarningsAsErrors: ''
-HeaderFilterRegex: '.*/(common|video|teleop|arm_sim|console_app)/.*'
+HeaderFilterRegex: '.*/(common|video|comms|teleop|hud|arm_sim|console_app)/.*'
