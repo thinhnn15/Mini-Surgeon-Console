@@ -6,7 +6,7 @@ requirements are tested and which are not.
 
 | ID | Requirement | Milestone | Verified by |
 | --- | --- | --- | --- |
-| REQ-VID-001 | The console always shows the newest video frame; older frames are dropped, never queued. | M2 | `LatestValue.REQ_VID_001_*` (mailbox; end-to-end in M2.3) |
+| REQ-VID-001 | The console always shows the newest video frame; older frames are dropped, never queued. | M2 | `LatestValue.REQ_VID_001_*` (mailbox); `console_app.REQ_VID_001_NewestFrameReachesTheScreen` (end to end, needs a GPU) |
 | REQ-VID-002 | Glass-to-glass latency is measured and its p50 and p99 are reported. | M2 | |
 | REQ-COM-001 | Every packet carries a sequence number, a monotonic timestamp and a CRC-32; corrupted or out-of-date packets are discarded. | M3 | `Crc32.REQ_COM_001_*` (CRC part) |
 | REQ-SAF-001 | If `arm_sim` receives no heartbeat for 3 periods, it holds position. | M3 | |

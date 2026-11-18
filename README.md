@@ -54,13 +54,19 @@ cmake --preset linux-gcc && cmake --build --preset linux-gcc && ctest --preset l
 cmake --preset linux-asan && cmake --build --preset linux-asan && ctest --preset linux-asan
 ```
 
+`console_app --check-video` opens the real window, reads the frame number back from the
+screen and fails if it is not the newest frame, at three window sizes (default, tall, wide),
+checking each time that the picture is letterboxed, not stretched. It needs a GPU backend and a display, so
+ctest registers it on Windows always and on Linux only when configured from a desktop
+session. Pick a backend with `QSG_RHI_BACKEND=d3d11|d3d12|vulkan|opengl`.
+
 ## Layout
 
 ```
 common/        plain C++: CRC-32, clock, triple buffer / latest-value mailbox (later: protocol)
-video/         plain C++: Frame, test pattern with a sequence barcode, SyntheticSource
+video/         plain C++: Frame, test pattern with a sequence barcode, SyntheticSource, letterbox
 arm_sim/       the simulated arm process (plain C++, no Qt)
-console_app/   the Qt Quick console
+console_app/   the Qt Quick console; VideoItem draws the video with QRhi (ADR 0003)
 cmake/         warnings, sanitizers, GoogleTest
 docs/          requirements, risks, architecture decisions, dev journal
 ```
