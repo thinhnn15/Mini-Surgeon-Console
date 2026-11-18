@@ -14,7 +14,11 @@ namespace msc {
 class FineTimerResolution {
 public:
     FineTimerResolution() noexcept;
+#if defined(_WIN32)
     ~FineTimerResolution();
+#else
+    ~FineTimerResolution() = default;  // nothing to give back
+#endif
     FineTimerResolution(const FineTimerResolution&) = delete;
     FineTimerResolution& operator=(const FineTimerResolution&) = delete;
     FineTimerResolution(FineTimerResolution&&) = delete;

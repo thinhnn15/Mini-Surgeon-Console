@@ -38,6 +38,9 @@ public:
 
     // Clamped into each joint's range.
     void setTarget(const JointArray& target) noexcept;
+    // Stop where braking at each joint's limit gets it to rest, and stay there (REQ-SAF-001):
+    // the target becomes the stopping point, so the usual profile does the braking.
+    void hold() noexcept;
     // Advances the motion by `dt`.
     void step(Nanoseconds dt) noexcept;
 

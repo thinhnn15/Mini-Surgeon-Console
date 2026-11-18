@@ -39,6 +39,15 @@ void ArmModel::setTarget(const JointArray& target) noexcept {
     }
 }
 
+void ArmModel::hold() noexcept {
+    for (std::size_t i = 0; i < kJointCount; ++i) {
+        Joint& j = joints_[i];
+        // From speed v, braking at a takes v^2 / 2a of travel.
+        const double stopping = (j.velocity * j.velocity) / (2.0 * limits_[i].maxAcceleration);
+        j.target = std::clamp(j.position + (sign(j.velocity) * stopping), limits_[i].min, limits_[i].max);
+    }
+}
+
 void ArmModel::step(Nanoseconds dt) noexcept {
     const double seconds = std::chrono::duration<double>(dt).count();
     if (seconds <= 0.0) {

@@ -79,7 +79,6 @@ void sleepUntil(std::chrono::steady_clock::time_point deadline) noexcept {
 }
 #else
 FineTimerResolution::FineTimerResolution() noexcept = default;
-FineTimerResolution::~FineTimerResolution() = default;
 
 void sleepUntil(std::chrono::steady_clock::time_point deadline) noexcept {
     std::this_thread::sleep_until(deadline);

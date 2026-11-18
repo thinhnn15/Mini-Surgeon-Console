@@ -26,7 +26,7 @@ every fault ends in a safe state that only an operator reset can leave.
 
 - [x] **M1** Skeleton: CMake, Qt 6 QML app, `arm_sim`, Google Test, CI on Windows and Linux, sanitizers
 - [x] **M2** Video path: capture thread, latest-frame mailbox, `QQuickRhiItem`, latency measurement, webcam, frozen-picture warning
-- [ ] **M3** `arm_sim` at 1 kHz, UDP protocol, heartbeat in both directions
+- [x] **M3** `arm_sim` at 1 kHz, UDP protocol, heartbeat in both directions
 - [ ] **M4** Teleop state machine (`std::variant`), watchdog, fault injector, tests with a fake clock
 - [ ] **M5** HUD overlay synchronised to the video by timestamp, hidden when stale
 - [ ] **M6** Soak test, profiling, risk table, requirement IDs traced to tests
@@ -68,6 +68,13 @@ the console's side panel while it runs.
 `arm_sim` is the simulated arm: a 1 kHz joint loop that follows `JointCommand` packets within
 each joint's position, velocity and acceleration limits and sends `JointTelemetry` back.
 `arm_sim --listen=127.0.0.1:47001 --duration=5 --report` prints how evenly it ticked.
+
+The arm link demo (ADR 0001): start `arm_sim` in a terminal, then `console_app --arm-demo` (the
+console commands a slow back-and-forth motion; `--arm=A.B.C.D:PORT` if the arm is elsewhere).
+The side panel shows "Arm link: OK" and the arm following. Kill the console (Task Manager, or
+`taskkill /F /IM console_app.exe`): within 30 ms `arm_sim` prints "console link lost" and
+"holding position", brakes and stays there. `link_check` tests exactly that with two real
+processes.
 
 `console_app --source camera` shows a webcam instead of the synthetic pattern (Qt Multimedia;
 the console builds without it). `--camera=TEXT` picks one by name or id, `--list-cameras` shows

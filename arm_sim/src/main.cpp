@@ -83,7 +83,7 @@ const char* stateName(msc::comms::ArmState state) {
 
 void printReport(const msc::arm::ArmController& arm, std::chrono::duration<double> ran) {
     const auto& s = arm.stats();
-    const auto& c = arm.commandStats();
+    const auto& c = arm.consoleStats();
     std::uint64_t refused = 0;
     for (const auto count : s.refused) {
         refused += count;
@@ -97,10 +97,14 @@ void printReport(const msc::arm::ArmController& arm, std::chrono::duration<doubl
         ms(arm.lateness().p50()), ms(arm.lateness().p99()), ms(arm.lateness().max()), arm.lateness().count(),
         ms(arm.maxLateness()));
     std::cout << std::format(
-        "  commands: {} applied, {} replaced within a tick, {} old or duplicate, {} malformed, {} lost; "
-        "telemetry: {} sent, {} failed\n",
-        s.commandsApplied, s.commandsReplaced, s.oldOrDuplicate, refused, c.lost, s.telemetrySent,
-        s.sendFailures);
+        "  from the console: {} commands applied, {} replaced within a tick, {} ignored (console not alive), "
+        "{} heartbeats; {} old or duplicate, {} malformed, {} lost\n",
+        s.commandsApplied, s.commandsReplaced, s.commandsIgnored, s.heartbeatsReceived, s.oldOrDuplicate,
+        refused, c.lost);
+    std::cout << std::format("  to the console: {} telemetry, {} heartbeats, {} failed; holds: {}\n",
+                             s.telemetrySent, s.heartbeatsSent, s.sendFailures, s.holds);
+    std::cout << std::format("  longest gap between console heartbeats: {:.1f} ms (holds after {:.0f} ms)\n",
+                             ms(s.longestHeartbeatGap), ms(arm.heartbeatLimit()));
     const auto p = arm.model().position();
     std::cout << std::format("  state: {}, joints [{:.3f} {:.3f} {:.3f} {:.3f} {:.3f} {:.3f}] rad\n",
                              stateName(arm.state()), p[0], p[1], p[2], p[3], p[4], p[5])
@@ -159,7 +163,14 @@ int run(std::span<char*> args) {
     std::signal(SIGINT, onSignal);
     std::signal(SIGTERM, onSignal);
 
+    // State changes go to stdout as they happen: the demo of ADR 0001 (kill the console, watch
+    // the arm hold) is read from here.
     const msc::SteadyClock clock;
+    const msc::Nanoseconds started = clock.now();
+    options.controller.log = [&clock, started](std::string_view message) {
+        const double at = std::chrono::duration<double>(clock.now() - started).count();
+        std::cout << std::format("arm_sim [{:8.3f} s] {}\n", at, message) << std::flush;
+    };
     msc::arm::ArmController arm(clock, std::move(*socket), options.controller);
     const auto start = std::chrono::steady_clock::now();
     arm.run(gStop, options.duration);
