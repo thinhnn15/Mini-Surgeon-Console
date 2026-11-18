@@ -9,6 +9,13 @@ Window {
     color: "#101418"
     title: qsTr("Mini Surgeon Console")
 
+    // The arm link's state for the side panel. main.cpp finds it by objectName and gives it the link.
+    ArmLinkModel {
+        id: armLink
+
+        objectName: "armLink"
+    }
+
     // M2: the endoscope video, drawn by VideoItem (a QQuickRhiItem). M5 adds the HUD overlay.
     Rectangle {
         id: videoArea
@@ -104,9 +111,19 @@ Window {
                 color: "#e6edf3"
                 font.pixelSize: 18
             }
+            // M3: the link to arm_sim, from the comms thread. Red when the arm's heartbeats stop:
+            // the arm then holds on its own (REQ-SAF-001), and the operator has to know why.
             Text {
-                text: qsTr("Arm link: —")
-                color: "#9aa7b4"
+                text: qsTr("Arm link: %1").arg(armLink.link)
+                color: armLink.linkOk ? "#3fb950" : (armLink.link === "lost" ? "#f85149" : "#9aa7b4")
+                font.pixelSize: 15
+            }
+            Text {
+                visible: armLink.armState !== ""
+                text: qsTr("Arm: %1%2").arg(armLink.armState)
+                                       .arg(armLink.joints.length > 0
+                                            ? " · j1 " + armLink.joints[0].toFixed(2) + " rad" : "")
+                color: armLink.armState === "holding" ? "#f0b429" : "#9aa7b4"
                 font.pixelSize: 15
             }
             Text {

@@ -1,6 +1,9 @@
+#include "arm_link_model.hpp"
 #include "freeze_check.hpp"
 #include "latency_report.hpp"
 #include "msc/common/clock.hpp"
+#include "msc/comms/arm_link.hpp"
+#include "msc/comms/udp_socket.hpp"
 #include "msc/video/frame_source.hpp"
 #include "msc/video/synthetic_source.hpp"
 #include "video_check.hpp"
@@ -21,6 +24,8 @@
 #include <functional>
 #include <memory>
 #include <optional>
+#include <string>
+#include <utility>
 
 namespace {
 
@@ -148,6 +153,33 @@ int main(int argc, char* argv[]) {
         source = synthetic;
     }
 
+    // The arm link (M3): its own thread, heartbeats every 10 ms. --arm=A.B.C.D:PORT is where
+    // arm_sim listens. Our own port is picked by the OS; the arm answers whoever talks to it.
+    std::optional<msc::comms::ArmLink> armLink;
+    {
+        msc::comms::ArmLinkConfig linkConfig;
+        if (const std::optional<QString> arm = optionValue(args, QStringLiteral("--arm"))) {
+            const auto endpoint = msc::comms::Endpoint::parse(arm->toStdString());
+            if (!endpoint) {
+                qCritical("console_app: --arm needs A.B.C.D:PORT");
+                return 1;
+            }
+            linkConfig.arm = *endpoint;
+        }
+        // On the loopback when the arm is (the default): nothing outside the machine can reach the
+        // socket, and Windows does not ask for a firewall exception.
+        const bool local = linkConfig.arm.address[0] == 127;
+        const msc::comms::Endpoint bindTo =
+            local ? msc::comms::Endpoint::loopback(0) : msc::comms::Endpoint{{0, 0, 0, 0}, 0};
+        std::string error;
+        if (std::optional<msc::comms::UdpSocket> socket = msc::comms::UdpSocket::open(bindTo, &error)) {
+            armLink.emplace(clock, std::move(*socket), linkConfig);
+            armLink->start();
+        } else {
+            qWarning("console_app: no arm link: %s", error.c_str());
+        }
+    }
+
     QQmlApplicationEngine engine;
     QObject::connect(
         &engine, &QQmlApplicationEngine::objectCreationFailed, &app, [] { QCoreApplication::exit(1); },
@@ -164,6 +196,10 @@ int main(int argc, char* argv[]) {
         return 1;
     }
     video->setFrameSource(source, clock);
+    if (auto* armModel = window->findChild<ArmLinkModel*>(QStringLiteral("armLink"));
+        armModel != nullptr && armLink) {
+        armModel->setLink(&*armLink, args.contains(QStringLiteral("--arm-demo")));
+    }
     std::function<void()> reportSource;
     if (synthetic) {
         video->setSourceStatus(fallbackReason.isEmpty()

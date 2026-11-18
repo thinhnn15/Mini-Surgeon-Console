@@ -27,7 +27,7 @@ qt_add_qml_module(console_app
     URI MiniConsole
     VERSION 1.0
     QML_FILES qml/Main.qml
-    SOURCES src/video_item.hpp src/video_item.cpp)
+    SOURCES src/video_item.hpp src/video_item.cpp src/arm_link_model.hpp src/arm_link_model.cpp)
 
 # Vulkan-style GLSL compiled at build time by qsb into one .qsb per shader, holding SPIR-V,
 # HLSL, MSL and GLSL variants, so the same file serves every QRhi backend.
@@ -41,7 +41,7 @@ qt_add_shaders(console_app "video_shaders"
 target_include_directories(console_app PRIVATE src)
 # GuiPrivate: QRhi (<rhi/qrhi.h>) is public API since Qt 6.6 but, with a weaker compatibility
 # promise than the rest of Qt, still lives in the private module.
-target_link_libraries(console_app PRIVATE Qt6::Quick Qt6::GuiPrivate msc::common msc::video)
+target_link_libraries(console_app PRIVATE Qt6::Quick Qt6::GuiPrivate msc::common msc::video msc::comms)
 target_compile_definitions(console_app PRIVATE MSC_VERSION="${PROJECT_VERSION}")
 set_target_properties(console_app PROPERTIES WIN32_EXECUTABLE ON MACOSX_BUNDLE ON)
 msc_set_warnings(console_app NO_WERROR)
