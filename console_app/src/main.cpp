@@ -4,10 +4,12 @@
 #include "msc/common/clock.hpp"
 #include "msc/comms/arm_link.hpp"
 #include "msc/comms/udp_socket.hpp"
+#include "msc/hud/pose_feed.hpp"
 #include "msc/teleop/teleop_core.hpp"
 #include "msc/video/frame_source.hpp"
 #include "msc/video/synthetic_source.hpp"
 #include "teleop_model.hpp"
+#include "tool_scene.hpp"
 #include "video_check.hpp"
 #include "video_item.hpp"
 
@@ -99,6 +101,23 @@ int main(int argc, char* argv[]) {
         qCritical("console_app: --check-video and --check-freeze use the synthetic source");
         return 1;
     }
+    // --video-delay=MS: the synthetic camera delivers each frame that long after capturing it
+    // (M5.2), as a real camera chain does. Above 150 ms the picture would be too close to the
+    // frozen-picture limit (250 ms from capture, REQ-VID-003) to count as live.
+    std::chrono::milliseconds videoDelay{0};
+    if (const std::optional<QString> delay = optionValue(args, QStringLiteral("--video-delay"))) {
+        bool ok = false;
+        const int ms = delay->toInt(&ok);
+        if (!ok || ms < 0 || ms > 150) {
+            qCritical("console_app: --video-delay=MS needs a whole number of milliseconds from 0 to 150");
+            return 1;
+        }
+        if (wantCamera) {
+            qCritical("console_app: --video-delay applies to the synthetic source");
+            return 1;
+        }
+        videoDelay = std::chrono::milliseconds(ms);
+    }
     if (args.contains(QStringLiteral("--list-cameras"))) {
 #if MSC_HAVE_CAMERA
         CameraSource::listDevices();
@@ -123,7 +142,12 @@ int main(int argc, char* argv[]) {
     // sources are destroyed here, on the GUI thread, after the renderer has let go of them
     // (the camera's Qt Multimedia objects must be deleted on this thread).
     const msc::SteadyClock clock;
-    const msc::video::SyntheticSourceConfig videoConfig{};
+    // The arm's poses, from the arm link's thread to whoever draws the arm (M5). Created first:
+    // the synthetic camera and the arm link both hold on to it.
+    const auto poses = std::make_shared<msc::hud::PoseFeed>();
+    msc::video::SyntheticSourceConfig videoConfig;
+    videoConfig.delay = videoDelay;
+    videoConfig.scene = makeToolScene(poses);  // the camera sees the instrument
     std::shared_ptr<msc::video::FrameSource> source;
     std::shared_ptr<msc::video::SyntheticSource> synthetic;
     QString fallbackReason;  // why the camera was asked for but the pattern is shown
@@ -170,12 +194,18 @@ int main(int argc, char* argv[]) {
         }
         // On the loopback when the arm is (the default): nothing outside the machine can reach the
         // socket, and Windows does not ask for a firewall exception.
+        // Every telemetry packet, stamped with its arrival on our clock, the clock the video
+        // frames are stamped with. Runs on the link thread: lock-free hand-overs only.
+        linkConfig.onTelemetry = [poses](const msc::comms::TelemetrySample& sample) {
+            poses->publish(
+                msc::hud::TimedPose{.time = sample.receivedAt, .position = sample.telemetry.position});
+        };
         const bool local = linkConfig.arm.address[0] == 127;
         const msc::comms::Endpoint bindTo =
             local ? msc::comms::Endpoint::loopback(0) : msc::comms::Endpoint{{0, 0, 0, 0}, 0};
         std::string error;
         if (std::optional<msc::comms::UdpSocket> socket = msc::comms::UdpSocket::open(bindTo, &error)) {
-            armLink.emplace(clock, std::move(*socket), linkConfig);
+            armLink.emplace(clock, std::move(*socket), std::move(linkConfig));
             armLink->start();
         } else {
             qWarning("console_app: no arm link: %s", error.c_str());
@@ -231,9 +261,13 @@ int main(int argc, char* argv[]) {
     }
     std::function<void()> reportSource;
     if (synthetic) {
-        video->setSourceStatus(fallbackReason.isEmpty()
-                                   ? QStringLiteral("Synthetic test pattern")
-                                   : QStringLiteral("Synthetic test pattern (%1)").arg(fallbackReason));
+        QString status = fallbackReason.isEmpty()
+                             ? QStringLiteral("Synthetic test pattern")
+                             : QStringLiteral("Synthetic test pattern (%1)").arg(fallbackReason);
+        if (videoDelay.count() > 0) {
+            status += QStringLiteral(", delayed %1 ms").arg(videoDelay.count());
+        }
+        video->setSourceStatus(status);
     }
 #if MSC_HAVE_CAMERA
     if (camera) {

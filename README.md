@@ -78,6 +78,11 @@ stopping on its own, video not live) turns the panel red and the arm holds; Rese
 accepted once the cause is gone, and leads to Idle. `console_app --hand-demo` drives the hand
 from a script instead of the mouse.
 
+With `arm_sim` running, the synthetic camera shows the instrument (M5): a shaft that pivots about
+its entry point, drawn where the arm's telemetry says it is at the moment each frame is captured.
+`--video-delay=MS` (0 to 150) delivers every frame that long after capture, like a real camera
+chain; the latency figures show it.
+
 Fault injector (testing): the chips at the right of the status bar turn a fault on and off
 (`link` = cable pulled, `corrupt` = one bit flipped in every packet to the arm, `hand` = hand
 controller frozen, `video` = video stopped, `fault` = generic). Scripted:

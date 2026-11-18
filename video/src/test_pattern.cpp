@@ -63,6 +63,10 @@ void fillRect(Frame& frame, std::uint32_t left, std::uint32_t top, std::uint32_t
 
 }  // namespace
 
+std::uint32_t barcodeRows(std::uint32_t frameHeight) noexcept {
+    return layoutFor(kMinPatternWidth, frameHeight).barcodeHeight;
+}
+
 std::uint32_t squareLeft(std::uint32_t frameWidth, std::uint32_t frameHeight,
                          std::uint64_t sequence) noexcept {
     const Layout l = layoutFor(frameWidth, frameHeight);
