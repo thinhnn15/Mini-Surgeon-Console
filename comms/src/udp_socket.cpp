@@ -268,8 +268,8 @@ ReceiveResult UdpSocket::receive(std::span<std::byte> buffer, std::chrono::milli
     }
 
     sockaddr_in from{};
-    SockLen fromLength = sizeof(from);
 #if defined(_WIN32)
+    SockLen fromLength = sizeof(from);
     const int received = ::recvfrom(native(handle_), chars(buffer), static_cast<int>(buffer.size()), 0,
                                     generic(from), &fromLength);
     if (received < 0) {
@@ -290,7 +290,7 @@ ReceiveResult UdpSocket::receive(std::span<std::byte> buffer, std::chrono::milli
     iovec io{buffer.data(), buffer.size()};
     msghdr message{};
     message.msg_name = &from;
-    message.msg_namelen = fromLength;
+    message.msg_namelen = sizeof(from);
     message.msg_iov = &io;
     message.msg_iovlen = 1;
     const ssize_t received = ::recvmsg(native(handle_), &message, 0);
