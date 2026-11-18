@@ -10,14 +10,19 @@
 #include <QTimer>
 #include <QVariantList>
 
-#include <chrono>
+#include <atomic>
+#include <stop_token>
+#include <thread>
 
 // The operator's side of the teleop core, for QML. GUI thread.
 //
-// It is the hand controller: every 10 ms it sends the hand's pose and clutch to the core, from
-// the pad in the window (or a scripted motion with --hand-demo). If the GUI thread stalls for
-// longer than the core's hand timeout, the readings stop and the core faults, exactly as with a
-// real hand device that froze.
+// It is the hand controller: every 10 ms the hand's pose and clutch go to the core.
+//   - From the pad in the window, on the GUI thread. If the GUI thread stalls for longer than the
+//     core's hand timeout, the readings stop and the core faults, exactly as with a real hand
+//     device that froze: the pad cannot know where the mouse went while the GUI was not looking.
+//   - With --hand-demo, from a scripted hand on a thread of its own. A scripted hand needs
+//     nothing from the window, so, like a real hand device, it does not depend on it (M5.2: a
+//     desktop that stalled the GUI thread for 300 ms at a time kept faulting the demo).
 //
 // It only shows the core's status and passes on requests: whether an engage or a reset is
 // allowed, and what state the console is in, is decided by the core alone.
@@ -56,7 +61,7 @@ public:
     // The pad: x and y from -1 to 1. Moves joints 1 and 2 of the hand by up to kHandRange.
     Q_INVOKABLE void setHand(double x, double y);
     // Fault injector: the hand controller stops reporting (no more samples to the core).
-    void setStalled(bool stalled) noexcept { stalled_ = stalled; }
+    void setStalled(bool stalled) noexcept { stalled_.store(stalled, std::memory_order_relaxed); }
 
     [[nodiscard]] QString state() const;
     [[nodiscard]] QString fault() const;
@@ -68,7 +73,7 @@ public:
     [[nodiscard]] QString link() const;
     [[nodiscard]] QString armState() const;
     [[nodiscard]] QVariantList joints() const;
-    [[nodiscard]] bool clutch() const noexcept { return clutch_; }
+    [[nodiscard]] bool clutch() const noexcept { return clutch_.load(std::memory_order_relaxed); }
     [[nodiscard]] double handX() const noexcept { return handX_; }
     [[nodiscard]] double handY() const noexcept { return handY_; }
     [[nodiscard]] bool demo() const noexcept { return demo_; }
@@ -80,6 +85,7 @@ signals:
 private:
     void tick();
     void request(msc::teleop::Request request);
+    void runScriptedHand(const std::stop_token& stop);
 
     msc::teleop::TeleopCore* core_ = nullptr;
     const msc::Clock* clock_ = nullptr;
@@ -87,11 +93,15 @@ private:
     bool hasStatus_ = false;
     bool demo_ = false;
     bool demoEngaged_ = false;
-    std::chrono::steady_clock::time_point demoStart_;
-    bool clutch_ = false;
-    bool stalled_ = false;
+    // Atomic: read by the scripted hand's thread, written by the GUI thread.
+    std::atomic<bool> clutch_{false};
+    std::atomic<bool> stalled_{false};
+    // Where the scripted hand is, for the pad's dot: written by its thread, read by the GUI.
+    std::atomic<double> scriptedX_{0.0};
+    std::atomic<double> scriptedY_{0.0};
     double handX_ = 0.0;
     double handY_ = 0.0;
     int ticksSinceRefresh_ = 0;
     QTimer timer_;
+    std::jthread scriptedHand_;  // last: stopped and joined before the members it uses go away
 };
