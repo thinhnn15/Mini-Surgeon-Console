@@ -68,8 +68,8 @@ using State = std::variant<Idle, Engaged, Paused, Fault>;
 // ---- Events: operator actions and detected faults ------------------------------------------
 
 struct Engage {
-    JointArray hand{};  // the hand's pose now
-    JointArray arm{};   // the arm's measured pose now
+    JointArray hand{};   // the hand's pose now
+    JointArray arm{};    // the arm's measured pose now
     FaultSet present{};  // conditions that would fault at once: engage is refused
 };
 struct Disengage {};
@@ -96,7 +96,7 @@ enum class Outcome : std::uint8_t {
 
 struct Result {
     Outcome outcome = Outcome::Unchanged;
-    std::string_view why;  // for Refused: shown to the operator
+    std::string_view why{};  // for Refused: shown to the operator
 };
 
 // The teleop state machine: which state the console is in, what every event does to it, and

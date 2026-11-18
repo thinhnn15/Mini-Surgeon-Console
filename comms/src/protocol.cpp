@@ -83,12 +83,16 @@ MessageType typeOf(const Message& message) noexcept {
     if (std::holds_alternative<JointTelemetry>(message)) {
         return MessageType::JointTelemetry;
     }
+    if (std::holds_alternative<HoldCommand>(message)) {
+        return MessageType::HoldCommand;
+    }
     return MessageType::Heartbeat;
 }
 
 std::size_t payloadSize(MessageType type) noexcept {
     switch (type) {
         case MessageType::Heartbeat:
+        case MessageType::HoldCommand:
             return kHeartbeatPayload;
         case MessageType::JointCommand:
             return kCommandPayload;
@@ -195,6 +199,12 @@ DecodeResult decode(std::span<const std::byte> bytes) noexcept {
                 return DecodeError::BadPayloadSize;
             }
             packet.message = Heartbeat{};
+            return packet;
+        case MessageType::HoldCommand:
+            if (payload != kHeartbeatPayload) {
+                return DecodeError::BadPayloadSize;
+            }
+            packet.message = HoldCommand{};
             return packet;
         case MessageType::JointCommand: {
             if (payload != kCommandPayload) {

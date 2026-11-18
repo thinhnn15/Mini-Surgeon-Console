@@ -38,13 +38,14 @@ enum class MessageType : std::uint8_t {
     Heartbeat = 1,
     JointCommand = 2,
     JointTelemetry = 3,
+    HoldCommand = 4,  // added in M4.2; a peer without it refuses it as an unknown type
 };
 
 // What the arm is doing, reported in its telemetry.
 enum class ArmState : std::uint8_t {
     Idle = 0,       // no command received yet
     Following = 1,  // moving toward the newest commanded target
-    Holding = 2,    // the console went silent: holding position, ignoring commands (REQ-SAF-001)
+    Holding = 2,    // told to hold, or the console went silent (REQ-SAF-001): braking, then staying
 };
 
 // "I am alive." Both sides send it at a fixed rate; the content is the header itself.
@@ -58,22 +59,29 @@ struct JointCommand {
     friend bool operator==(const JointCommand&, const JointCommand&) = default;
 };
 
+// Console -> arm: stop where braking at the limits gets you, and stay, until the next
+// JointCommand. Sent while nobody drives the arm (console idle, clutch held, fault), so the arm
+// never keeps going toward a target the operator no longer controls.
+struct HoldCommand {
+    friend bool operator==(const HoldCommand&, const HoldCommand&) = default;
+};
+
 // Arm -> console: where the joints are, and what the arm is doing.
 struct JointTelemetry {
     JointArray position{};
     JointArray velocity{};
     ArmState state = ArmState::Idle;
-    std::uint32_t lastCommandSequence = 0;  // newest command applied, so the console can tell
+    std::uint32_t lastCommandSequence = 0;  // newest command (move or hold) applied: the console's ack
     friend bool operator==(const JointTelemetry&, const JointTelemetry&) = default;
 };
 
-using Message = std::variant<Heartbeat, JointCommand, JointTelemetry>;
+using Message = std::variant<Heartbeat, JointCommand, JointTelemetry, HoldCommand>;
 
 struct Packet {
     std::uint32_t session = 0;
     std::uint32_t sequence = 0;
     Nanoseconds timestamp{0};
-    Message message;
+    Message message{};
     friend bool operator==(const Packet&, const Packet&) = default;
 };
 

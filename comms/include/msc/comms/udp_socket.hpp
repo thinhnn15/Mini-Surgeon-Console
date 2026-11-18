@@ -36,7 +36,7 @@ enum class ReceiveStatus : std::uint8_t {
 struct ReceiveResult {
     ReceiveStatus status = ReceiveStatus::Timeout;
     std::size_t size = 0;  // bytes in the buffer
-    Endpoint from;
+    Endpoint from{};
     // The datagram was larger than the buffer: only its start is in the buffer, the rest is
     // gone (UDP never splits a datagram over two receives). Not ours, or a protocol mismatch.
     bool truncated = false;
