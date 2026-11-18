@@ -268,8 +268,20 @@ private:
         // GitHub Windows runner the console lost the arm link (30 ms without a heartbeat) three
         // times in two seconds with the window open, and never does without it. That is a
         // finding about thread priorities (journal, M5.4), not about the overlay: skip.
-        if (const QRhi* rhi = window_.rhi();
-            rhi != nullptr && rhi->driverInfo().deviceType == QRhiDriverInfo::CpuDevice) {
+        // Qt does not always say so in the device type (it did not on that runner), so the
+        // software devices are also known by name.
+        const QRhi* rhi = window_.rhi();
+        if (rhi != nullptr && !deviceReported_) {
+            deviceReported_ = true;
+            std::printf("hud check: drawing on \"%s\"\n", rhi->driverInfo().deviceName.constData());
+            std::fflush(stdout);
+        }
+        const auto drawsOnTheCpu = [](const QRhiDriverInfo& info) {
+            const QByteArray name = info.deviceName.toLower();
+            return info.deviceType == QRhiDriverInfo::CpuDevice || name.contains("basic render") ||
+                   name.contains("warp") || name.contains("llvmpipe") || name.contains("swiftshader");
+        };
+        if (rhi != nullptr && drawsOnTheCpu(rhi->driverInfo())) {
             std::printf("hud check: SKIPPED - this machine draws on the CPU (%s); the check needs a GPU\n",
                         rhi->driverInfo().deviceName.constData());
             std::fflush(stdout);
@@ -580,6 +592,7 @@ private:
     QString hiddenStatus_;
     int resets_ = 0;
     bool faultReported_ = false;
+    bool deviceReported_ = false;
     bool finished_ = false;
 };
 
