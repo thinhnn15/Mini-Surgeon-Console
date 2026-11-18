@@ -1,9 +1,11 @@
 #include "fault_injector.hpp"
 #include "freeze_check.hpp"
+#include "hud_check.hpp"
 #include "latency_report.hpp"
 #include "msc/common/clock.hpp"
 #include "msc/comms/arm_link.hpp"
 #include "msc/comms/udp_socket.hpp"
+#include "msc/hud/arrival_jitter.hpp"
 #include "msc/hud/pose_feed.hpp"
 #include "msc/teleop/teleop_core.hpp"
 #include "msc/video/frame_source.hpp"
@@ -18,6 +20,7 @@
 #endif
 
 #include <QGuiApplication>
+#include <QProcess>
 #include <QQmlApplicationEngine>
 #include <QQuickWindow>
 #include <QSurfaceFormat>
@@ -82,6 +85,7 @@ int main(int argc, char* argv[]) {
     const bool smokeTest = args.contains(QStringLiteral("--smoke"));
     const bool videoCheck = args.contains(QStringLiteral("--check-video"));
     const bool freezeCheck = args.contains(QStringLiteral("--check-freeze"));
+    const bool hudCheck = args.contains(QStringLiteral("--check-hud"));
     const MeasureOption measure = measureOption(args);
     if (measure.given && !measure.duration) {
         qCritical("console_app: --measure-latency=SECONDS needs a positive whole number of seconds");
@@ -96,15 +100,18 @@ int main(int argc, char* argv[]) {
         qCritical("console_app: --source must be \"synthetic\" or \"camera\"");
         return 1;
     }
-    // Both checks need a source they can stop, start and read the frame number from.
-    if (wantCamera && (videoCheck || freezeCheck)) {
-        qCritical("console_app: --check-video and --check-freeze use the synthetic source");
+    // The checks need a source they can stop, start and read from (the frame number, the
+    // instrument the simulated camera draws).
+    if (wantCamera && (videoCheck || freezeCheck || hudCheck)) {
+        qCritical("console_app: --check-video, --check-freeze and --check-hud use the synthetic source");
         return 1;
     }
     // --video-delay=MS: the synthetic camera delivers each frame that long after capturing it
     // (M5.2), as a real camera chain does. Above 150 ms the picture would be too close to the
     // frozen-picture limit (250 ms from capture, REQ-VID-003) to count as live.
-    std::chrono::milliseconds videoDelay{0};
+    // The overlay check needs a delay to tell a synchronised overlay from a naive one: 80 ms
+    // unless another is asked for.
+    std::chrono::milliseconds videoDelay{hudCheck ? 80 : 0};
     if (const std::optional<QString> delay = optionValue(args, QStringLiteral("--video-delay"))) {
         bool ok = false;
         const int ms = delay->toInt(&ok);
@@ -145,6 +152,8 @@ int main(int argc, char* argv[]) {
     // The arm's poses, from the arm link's thread to whoever draws the arm (M5). Created first:
     // the synthetic camera and the arm link both hold on to it.
     const auto poses = std::make_shared<msc::hud::PoseFeed>();
+    // How late telemetry arrives (M5.4): what stamping poses with their arrival time costs.
+    const auto arrivals = std::make_shared<msc::hud::ArrivalJitter>();
     msc::video::SyntheticSourceConfig videoConfig;
     videoConfig.delay = videoDelay;
     videoConfig.scene = makeToolScene(poses);  // the camera sees the instrument
@@ -179,12 +188,37 @@ int main(int argc, char* argv[]) {
         source = synthetic;
     }
 
+    // --arm-exe=PATH: start an arm_sim of our own, on a free loopback port, and stop it when
+    // the console exits. For --check-hud under CTest, which has no arm running. Declared
+    // before the arm link, so the link stops first.
+    QProcess armProcess;
+    std::optional<msc::comms::Endpoint> ownArm;
+    if (const std::optional<QString> armExe = optionValue(args, QStringLiteral("--arm-exe"))) {
+        std::uint16_t port = 0;
+        {
+            // Ask the OS for a free port, and give it back for arm_sim to take.
+            const std::optional<msc::comms::UdpSocket> probe =
+                msc::comms::UdpSocket::open(msc::comms::Endpoint::loopback(0));
+            port = probe ? probe->localEndpoint().port : std::uint16_t{0};
+        }
+        ownArm = msc::comms::Endpoint::loopback(port);
+        armProcess.setProcessChannelMode(QProcess::ForwardedChannels);  // its log into ours
+        armProcess.start(*armExe,
+                         {QStringLiteral("--listen=%1").arg(QString::fromStdString(ownArm->toString()))});
+        if (port == 0 || !armProcess.waitForStarted(5000)) {
+            qCritical("console_app: --arm-exe: could not start %s", qPrintable(*armExe));
+            return 1;
+        }
+    }
+
     // The arm link (M3): its own thread, heartbeats every 10 ms. --arm=A.B.C.D:PORT is where
     // arm_sim listens. Our own port is picked by the OS; the arm answers whoever talks to it.
     std::optional<msc::comms::ArmLink> armLink;
     {
         msc::comms::ArmLinkConfig linkConfig;
-        if (const std::optional<QString> arm = optionValue(args, QStringLiteral("--arm"))) {
+        if (ownArm) {
+            linkConfig.arm = *ownArm;
+        } else if (const std::optional<QString> arm = optionValue(args, QStringLiteral("--arm"))) {
             const auto endpoint = msc::comms::Endpoint::parse(arm->toStdString());
             if (!endpoint) {
                 qCritical("console_app: --arm needs A.B.C.D:PORT");
@@ -196,7 +230,8 @@ int main(int argc, char* argv[]) {
         // socket, and Windows does not ask for a firewall exception.
         // Every telemetry packet, stamped with its arrival on our clock, the clock the video
         // frames are stamped with. Runs on the link thread: lock-free hand-overs only.
-        linkConfig.onTelemetry = [poses](const msc::comms::TelemetrySample& sample) {
+        linkConfig.onTelemetry = [poses, arrivals](const msc::comms::TelemetrySample& sample) {
+            arrivals->add(sample.receivedAt, sample.armTime);
             poses->publish(
                 msc::hud::TimedPose{.time = sample.receivedAt, .position = sample.telemetry.position});
         };
@@ -251,9 +286,11 @@ int main(int argc, char* argv[]) {
             return 1;
         }
     }
-    if (auto* teleopModel = window->findChild<TeleopModel*>(QStringLiteral("teleop"));
-        teleopModel != nullptr && teleop) {
-        teleopModel->setCore(&*teleop, &clock, args.contains(QStringLiteral("--hand-demo")));
+    auto* teleopModel = window->findChild<TeleopModel*>(QStringLiteral("teleop"));
+    FaultInjector* faults = nullptr;
+    if (teleopModel != nullptr && teleop) {
+        // The overlay check drives the arm with the scripted hand.
+        teleopModel->setCore(&*teleop, &clock, args.contains(QStringLiteral("--hand-demo")) || hudCheck);
         // REQ-VID-003 -> M4.2: a picture that is not live (frozen, or no frame yet) stops
         // tele-operation. The core reads the flag; it never waits for the video.
         const auto updateVideo = [&teleop, video] {
@@ -263,7 +300,8 @@ int main(int argc, char* argv[]) {
         updateVideo();
 
         // M4.4: faults on purpose, from the status bar or --inject=NAME@START[-END],...
-        if (auto* faults = window->findChild<FaultInjector*>(QStringLiteral("faults")); faults != nullptr) {
+        faults = window->findChild<FaultInjector*>(QStringLiteral("faults"));
+        if (faults != nullptr) {
             faults->setTargets(&*armLink, &*teleop, teleopModel, source.get());
             if (const std::optional<QString> script = optionValue(args, QStringLiteral("--inject"))) {
                 QString error;
@@ -328,11 +366,24 @@ int main(int argc, char* argv[]) {
     } else if (freezeCheck) {
         window->setFlag(Qt::WindowStaysOnTopHint, true);
         startFreezeCheck(*window, *video, *source);
+    } else if (hudCheck) {
+        if (teleopModel == nullptr || faults == nullptr || !teleop) {
+            qCritical("console_app: --check-hud needs the arm link, the teleop model and the fault injector");
+            return 1;
+        }
+        window->setFlag(Qt::WindowStaysOnTopHint, true);
+        startHudCheck(*window, *video, *teleopModel, *faults, *arrivals, videoConfig.width,
+                      videoConfig.height);
     } else if (measure.duration) {
         // On top for the same reason as the video check: a window hidden behind others may be
         // throttled, and that is not the latency being measured.
         window->setFlag(Qt::WindowStaysOnTopHint, true);
         startLatencyMeasurement(*window, *video, *measure.duration, reportSource);
     }
-    return QGuiApplication::exec();
+    const int result = QGuiApplication::exec();
+    if (armProcess.state() != QProcess::NotRunning) {
+        armProcess.kill();  // our own arm_sim: it has no other way to know the console is done
+        armProcess.waitForFinished(3000);
+    }
+    return result;
 }

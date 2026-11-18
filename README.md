@@ -28,7 +28,7 @@ every fault ends in a safe state that only an operator reset can leave.
 - [x] **M2** Video path: capture thread, latest-frame mailbox, `QQuickRhiItem`, latency measurement, webcam, frozen-picture warning
 - [x] **M3** `arm_sim` at 1 kHz, UDP protocol, heartbeat in both directions
 - [x] **M4** Teleop state machine (`std::variant`), watchdog, fault injector, tests with a fake clock
-- [ ] **M5** HUD overlay synchronised to the video by timestamp, hidden when stale
+- [x] **M5** HUD overlay synchronised to the video by timestamp, hidden when stale
 - [ ] **M6** Soak test, profiling, risk table, requirement IDs traced to tests
 
 ## Build
@@ -87,7 +87,10 @@ The overlay (M5) is the ring around the instrument's tip. It is drawn where the 
 frame on screen was captured, in the video's own render pass, and not at all when that is not
 known (REQ-HUD-001): try the `link` chip. H (or `--hud=synced|naive|off`) switches to a naive
 overlay that uses the newest pose instead: with `--video-delay=80` and the arm moving, the yellow
-ring runs ahead of the instrument.
+ring runs ahead of the instrument. `console_app --check-hud --arm-exe=PATH/arm_sim` measures both
+from the pixels the renderer drew (synchronised: 0.3 px from the tip; naive: 7 px, which is the
+tip's speed times the frame's age), then cuts the arm link and times how long the ring stays
+(about 100 ms: the frames captured before the cut).
 
 Fault injector (testing): the chips at the right of the status bar turn a fault on and off
 (`link` = cable pulled, `corrupt` = one bit flipped in every packet to the arm, `hand` = hand
@@ -115,7 +118,7 @@ To run the exe from Explorer, copy Qt next to it once:
 ## Layout
 
 ```
-common/        plain C++: CRC-32, clock, triple buffer / latest-value mailbox, latency percentiles
+common/        plain C++: CRC-32, clock, triple buffer / latest-value mailbox, SPSC queue, latency percentiles
 video/         plain C++: Frame, test pattern with a sequence barcode, SyntheticSource, letterbox,
                presentation timing, YUV to RGBA conversion, frozen-picture rule
 comms/         plain C++: the arm link's wire protocol (session, sequence, timestamp, CRC-32), sequence filter,
@@ -123,8 +126,11 @@ comms/         plain C++: the arm link's wire protocol (session, sequence, times
 tools/         end-to-end checks with real processes: link_check, safety_check
 teleop/        plain C++: the teleop state machine (std::variant), clutch and motion scaling, the teleop
                core (fixed-rate thread, watchdogs)
+hud/           plain C++: the overlay's logic: pose history (lookup by time), tool camera (joint angles
+               to image), which frames get a marker (REQ-HUD-001)
 arm_sim/       the simulated arm process (plain C++, no Qt): joint model, 1 kHz controller
-console_app/   the Qt Quick console; VideoItem draws the video with QRhi (ADR 0003), CameraSource
+console_app/   the Qt Quick console; VideoItem draws the video and the overlay with QRhi (ADR 0003),
+               CameraSource
 cmake/         warnings, sanitizers, GoogleTest
 docs/          requirements, risks, architecture decisions, dev journal
 ```

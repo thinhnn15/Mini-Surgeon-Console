@@ -257,3 +257,25 @@ Template:
 - The ring itself: one quad and a fragment shader (distance from the centre, two `smoothstep`s), its matrix and colour in a 96-byte uniform buffer. Blended over the picture, with the alpha written kept at 1, because Qt Quick composes the item by that alpha.
 - Sabotage: falling back to the newest pose when the frame's time is not known failed four tests, two of them `REQ_HUD_001_*`.
 - Interview sentence: "The overlay is drawn in the video's own render pass from the frame's capture timestamp, so it cannot be a frame off; and when the pose for that timestamp is not known it draws nothing and says why, because a marker in the wrong place is worse than no marker."
+
+## 2026-11-18 · M5.4 · Measured: 0.3 px synchronised, 7 px naive, gone 100 ms after the link
+- `console_app --check-hud --arm-exe=.../arm_sim` starts a real `arm_sim`, drives it with the scripted hand, and measures from the pixels the renderer drew: the centre of the instrument's orange tip and the centre of the overlay's ring, in pixels of the 1280-wide frame. 30 captures synchronised, 30 naive, then the arm link is cut and restored. Video delay 80 ms. Eight runs on Windows (Release, D3D11):
+
+| | median | worst capture |
+| --- | --- | --- |
+| synchronised: ring to tip | 0.24–0.41 px | 0.69–1.41 px |
+| naive: ring to tip | 6.9–7.6 px | 9.8–13.5 px |
+| naive, predicted (tip speed × frame age when drawn: ~77 px/s × ~88 ms) | 6.6–7.3 px | |
+| naive, measured / predicted | 1.00–1.08 | |
+
+- The naive error is exactly what the arithmetic says, which is the useful result: it is not "a bit off", it is speed × latency, and it grows with both. At the arm's top speed (up to about 1000 px/s in this picture) the same 88 ms would be 90 px: the tip would be outside its own ring.
+- Arm link cut: the ring was gone 93–123 ms later, with the panel saying "no arm data for the picture on screen". That is the video latency, not a timeout: frames captured before the cut still get their ring, because the arm's pose at their moment is known. Back 97–102 ms after the link.
+- What stamping poses with their arrival time costs (the M5.1 decision): over ~10 000 packets per run, none arrived more than 1 ms later than the quickest; worst 0.1–0.9 ms. At this tip speed that is under 0.1 px; at top speed, about 1 px. Arrival time stays. This is loopback on one machine: across a real network the figure would have to be measured again.
+- Three things went wrong before the first number:
+  - Grabbing the window (`QQuickWindow::grabWindow`) stalled the GUI thread for 1.00–1.16 s after every grab on D3D11, on every grab. A 60 fps overlay cannot be timed with one look per second. The check now asks the renderer to read back its own render target after the pass (`readBackTexture`), which costs nothing visible and also says which frame was drawn and when.
+  - On a desktop with two screens at 100 % and 125 %, the window came up half on each, and most grabs did not match the window's geometry. (Reading back the item's own target does not care where the window is.)
+  - One of the first three runs crashed at exit, after printing PASS. The renderer owned the read-back's result and its callback pointed at the renderer, while QRhi keeps a pointer to the result until the pixels arrive; the check always has one read-back under way when it quits. Not proven with a debugger, but the result now lives in the channel shared by the item and the renderer, which outlives the renderer, and the callback touches only the channel: 15 runs since, no crash.
+- The check's own timer runs on the GUI thread, which stalls here (M5.2). So the time the ring disappeared is not "when the check looked" but the time of the first draw without it, noted by the renderer and carried in the capture.
+- Sabotage, end to end: the synchronised overlay using the newest pose gave 11.6 px and failed three limits. Holding the last pose when the frame's time is not known failed "the ring stayed on screen after the arm link was cut".
+- What the simulation does not cover: a real camera's timestamps (exposure time, rolling shutter, a driver that stamps late); the trip on a real network; two clocks drifting; and the camera here learns the pose from the same telemetry, so a wrong telemetry value would be wrong in the picture and in the overlay alike. The check proves the timing and the plumbing, not the kinematic calibration.
+- Interview sentence: "I measured the overlay from the rendered pixels: synchronised to the frame's capture time it sits 0.3 px from the instrument, drawn from the newest pose it is 7 px off, which is the tip's speed times the frame's age to within 8 %; and when the arm link is cut the ring is gone after one video latency, because the frames captured before the cut are still telling the truth."

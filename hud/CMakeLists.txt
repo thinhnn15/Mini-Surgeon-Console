@@ -13,6 +13,7 @@ msc_set_warnings(msc_hud)
 
 if(BUILD_TESTING)
     add_executable(msc_hud_tests
+        tests/arrival_jitter_test.cpp
         tests/hud_overlay_test.cpp
         tests/pose_feed_test.cpp
         tests/pose_history_test.cpp

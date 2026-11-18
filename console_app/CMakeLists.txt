@@ -9,6 +9,8 @@ qt_add_executable(console_app
     src/freeze_check.hpp
     src/freeze_check.cpp
     src/graphics_api.hpp
+    src/hud_check.hpp
+    src/hud_check.cpp
     src/latency_report.hpp
     src/latency_report.cpp
     src/tool_scene.hpp
@@ -103,5 +105,14 @@ if(BUILD_TESTING)
         set_tests_properties(console_app.REQ_VID_003_FrozenVideoIsFlagged PROPERTIES
             ENVIRONMENT_MODIFICATION "${qt_test_env}"
             TIMEOUT 60)
+
+        # REQ-HUD-001, from the picture on screen, with a real arm_sim: the overlay's ring is on
+        # the instrument's tip when synchronised, off by speed x latency when naive, gone soon
+        # after the arm link is cut and back with it. The figures go in the journal.
+        add_test(NAME console_app.REQ_HUD_001_OverlayIsOnTheInstrumentAndHiddenWhenStale
+                 COMMAND console_app --check-hud --arm-exe=$<TARGET_FILE:arm_sim>)
+        set_tests_properties(console_app.REQ_HUD_001_OverlayIsOnTheInstrumentAndHiddenWhenStale PROPERTIES
+            ENVIRONMENT_MODIFICATION "${qt_test_env}"
+            TIMEOUT 120)
     endif()
 endif()
