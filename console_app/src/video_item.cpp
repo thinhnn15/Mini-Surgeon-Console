@@ -25,6 +25,10 @@ using namespace std::chrono_literals;
 
 // How often the renderer turns its timings into statistics for the GUI.
 constexpr auto kStatsInterval = 250ms;
+// How often the GUI thread checks that the picture is live (REQ-VID-003). A frozen picture is
+// flagged at most this long after it passes msc::video::kFrozenAfter. The check is one atomic
+// load and a subtraction.
+constexpr auto kWatchdogPeriod = 50ms;
 
 // Bars around the picture. Black, as on a real endoscope monitor: anything brighter pulls
 // the eye away from the image.
@@ -178,6 +182,7 @@ void VideoRenderer::synchronize(QQuickRhiItem* item) {
         clock_ = video->clock_;
         hasFrame_ = false;
         tracker_.reset();
+        video->channel_->newestCapture.store(VideoStatsChannel::kNoFrame, std::memory_order_relaxed);
     }
     channel_ = video->channel_;
 
@@ -248,6 +253,11 @@ void VideoRenderer::render(QRhiCommandBuffer* cb) {
             if (clock_ != nullptr) {
                 tracker_.frameUploaded(frame.sequence, frame.captureTime, clock_->now());
             }
+            // Drawn in this frame, presented at its swap a few milliseconds from now. Relaxed:
+            // a single number, nothing else is read through it.
+            if (channel_) {
+                channel_->newestCapture.store(frame.captureTime.count(), std::memory_order_relaxed);
+            }
         }
     }
 
@@ -283,6 +293,42 @@ VideoItem::VideoItem(QQuickItem* parent) : QQuickRhiItem(parent) {
         }
     });
     statsTimer_.start();
+
+    watchdogTimer_.setInterval(kWatchdogPeriod);
+    connect(&watchdogTimer_, &QTimer::timeout, this, &VideoItem::checkVideoSignal);
+    watchdogTimer_.start();
+}
+
+// REQ-VID-003. Runs on the GUI thread, on its own timer: it must not depend on the renderer
+// or the source being healthy, since they are what it watches. (If the GUI thread itself
+// hangs, nothing on screen changes at all; that needs a watchdog outside the process.)
+void VideoItem::checkVideoSignal() {
+    std::optional<msc::Nanoseconds> newest;
+    const std::int64_t captured = channel_->newestCapture.load(std::memory_order_relaxed);
+    if (source_ && clock_ != nullptr && captured != VideoStatsChannel::kNoFrame) {
+        newest = msc::Nanoseconds{captured};
+    }
+    const msc::Nanoseconds now = clock_ != nullptr ? clock_->now() : msc::Nanoseconds{0};
+    const auto state = static_cast<VideoState>(msc::video::classifySignal(newest, now));
+    const double age = newest ? std::chrono::duration<double, std::milli>(now - *newest).count() : 0.0;
+
+    if (state != videoState_) {
+        videoState_ = state;
+        emit videoStateChanged();
+    }
+    // Only the frozen banner shows the age; no need to wake QML 20 times a second otherwise.
+    if (state != VideoState::Live || frameAgeMs_ != 0.0) {
+        frameAgeMs_ = state == VideoState::Live ? 0.0 : age;
+        emit frameAgeChanged();
+    }
+}
+
+void VideoItem::setSourceStatus(const QString& status) {
+    if (status == sourceStatus_) {
+        return;
+    }
+    sourceStatus_ = status;
+    emit sourceStatusChanged();
 }
 
 void VideoItem::setFrameSource(std::shared_ptr<FrameSource> source, const msc::Clock& clock) {

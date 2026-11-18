@@ -12,6 +12,7 @@
 #include <chrono>
 #include <cstdio>
 #include <optional>
+#include <utility>
 
 namespace {
 
@@ -25,11 +26,12 @@ double ms(const std::optional<msc::Nanoseconds>& t) {
     return t ? std::chrono::duration<double, std::milli>(*t).count() : 0.0;
 }
 
-void report(const QQuickWindow& window, const msc::video::PresentationStats& s) {
+void report(const QQuickWindow& window, const VideoItem& item, const msc::video::PresentationStats& s) {
     const bool vsync = window.requestedFormat().swapInterval() != 0;
     std::printf("latency: %s, vsync %s, screen %s at %.0f Hz\n",
                 graphicsApiName(window.rendererInterface()->graphicsApi()), vsync ? "on" : "off",
                 qPrintable(window.screen()->name()), window.screen()->refreshRate());
+    std::printf("  source: %s\n", qPrintable(item.sourceStatus()));
 
     double seconds = 0.0;
     if (s.firstSwap && s.lastSwap && *s.lastSwap > *s.firstSwap) {
@@ -48,12 +50,16 @@ void report(const QQuickWindow& window, const msc::video::PresentationStats& s) 
 
 }  // namespace
 
-void startLatencyMeasurement(QQuickWindow& window, VideoItem& item, std::chrono::seconds duration) {
-    QTimer::singleShot(kWarmUp, &item, [&window, &item, duration] {
+void startLatencyMeasurement(QQuickWindow& window, VideoItem& item, std::chrono::seconds duration,
+                             std::function<void()> reportSource) {
+    QTimer::singleShot(kWarmUp, &item, [&window, &item, duration, reportSource = std::move(reportSource)] {
         item.resetStats();
-        QTimer::singleShot(duration, &item, [&window, &item] {
+        QTimer::singleShot(duration, &item, [&window, &item, reportSource] {
             const msc::video::PresentationStats& s = item.stats();
-            report(window, s);
+            report(window, item, s);
+            if (reportSource) {
+                reportSource();
+            }
             const bool measured = s.samples > 0 && s.captureToPresentP50 && s.captureToPresentP99;
             if (!measured) {
                 std::printf("  FAIL - no frame was presented, so nothing was measured\n");
