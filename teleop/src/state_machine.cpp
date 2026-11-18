@@ -114,7 +114,7 @@ std::string_view toString(FaultCode code) noexcept {
         case FaultCode::ArmHoldingOnItsOwn:
             return "arm stopped on its own";
         case FaultCode::VideoFrozen:
-            return "video frozen";
+            return "video not live (frozen or missing)";
         case FaultCode::Injected:
             return "injected fault";
     }

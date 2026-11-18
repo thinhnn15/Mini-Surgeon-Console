@@ -20,8 +20,8 @@ enum class FaultCode : std::uint8_t {
     HandInputStale,          // the hand controller stopped reporting
     CommandNotAcknowledged,  // the arm's telemetry stopped confirming our commands
     ArmHoldingOnItsOwn,      // the arm went to Holding by itself (its own watchdog fired)
-    VideoFrozen,             // the surgeon can no longer see what the arm does (REQ-VID-003)
-    Injected,                // the fault injector (M4.4)
+    VideoFrozen,  // the picture is not live (frozen or no frames): the surgeon cannot see (REQ-VID-003)
+    Injected,     // the fault injector (M4.4)
 };
 inline constexpr std::size_t kFaultCodeCount = 6;
 
