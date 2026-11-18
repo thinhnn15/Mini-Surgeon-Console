@@ -9,6 +9,7 @@
 #include "msc/video/video_signal.hpp"
 
 #include <QtQml/qqmlregistration.h>
+#include <QImage>
 #include <QQuickRhiItem>
 #include <QTimer>
 
@@ -17,9 +18,27 @@
 #include <cstdint>
 #include <limits>
 #include <memory>
+#include <mutex>
 #include <optional>
 
 class VideoRenderer;
+struct QRhiReadbackResult;
+
+// One draw of the video item, read back from its own render target: the picture inside its
+// bars with the overlay on it, exactly as the renderer drew them together, and which frame it
+// was. For the end-to-end checks (M5.4): QQuickWindow::grabWindow would do, but on Direct3D 11
+// every grab was followed by a one-second stall of the render thread, and it says nothing about
+// which frame it caught.
+struct FrameCapture {
+    QImage image;                     // RGBA, top row first
+    std::uint64_t sequence = 0;       // the video frame in it
+    msc::Nanoseconds captureTime{0};  // when that frame was captured
+    msc::Nanoseconds drawnAt{0};      // when this draw chose the overlay's pose
+    msc::hud::HudState hud = msc::hud::HudState::NoData;
+    // The first draw of the unbroken run of draws with this overlay state, up to this one:
+    // when the ring appeared or disappeared, to the frame, however late the capture is looked at.
+    msc::Nanoseconds hudSince{0};
+};
 
 // How the renderer's statistics reach the GUI thread. Not through synchronize(): the renderer
 // keeps itself rendering with QQuickRhiItemRenderer::update(), which on purpose does not run
@@ -29,6 +48,13 @@ class VideoRenderer;
 // thread reads on a timer. Shared, because the renderer may outlive the item.
 struct VideoStatsChannel {
     static constexpr std::int64_t kNoFrame = std::numeric_limits<std::int64_t>::min();
+
+    VideoStatsChannel();
+    ~VideoStatsChannel();  // in the .cpp, where QRhiReadbackResult is a complete type
+    VideoStatsChannel(const VideoStatsChannel&) = delete;
+    VideoStatsChannel& operator=(const VideoStatsChannel&) = delete;
+    VideoStatsChannel(VideoStatsChannel&&) = delete;
+    VideoStatsChannel& operator=(VideoStatsChannel&&) = delete;
 
     msc::LatestValue<msc::video::PresentationStats> stats;  // render thread -> GUI thread
     std::atomic<bool> resetRequested{false};                // GUI thread -> render thread
@@ -40,6 +66,17 @@ struct VideoStatsChannel {
     // the frame on screen (drawn, or why not).
     std::atomic<msc::hud::HudMode> hudMode{msc::hud::HudMode::Synced};     // GUI thread -> render thread
     std::atomic<msc::hud::HudState> hudState{msc::hud::HudState::NoData};  // render thread -> GUI thread
+    // A read-back of one draw, for the checks. Not on the video path: the renderer looks at one
+    // flag per draw, and the mutex is only taken when a capture is handed over.
+    std::atomic<bool> captureRequested{false};  // GUI thread -> render thread
+    std::mutex captureMutex;                    // guards `capture`
+    std::optional<FrameCapture> capture;        // render thread -> GUI thread
+    // Render thread only. Where QRhi puts the pixels it reads back, and whether a read-back is
+    // under way. Here rather than in the renderer because QRhi keeps a pointer to it until the
+    // read-back completes, which can be after the renderer is gone (the window closing with a
+    // capture under way crashed at exit when the renderer owned it).
+    std::unique_ptr<QRhiReadbackResult> readback;
+    bool readbackPending = false;
 };
 
 // Shows the newest frame of a FrameSource, scaled to fit at its own aspect ratio (black bars
@@ -117,6 +154,11 @@ public:
     // GUI thread. Where the arm's poses come from, for the overlay. The renderer becomes the
     // feed's one "every pose" reader.
     void setPoseFeed(std::shared_ptr<msc::hud::PoseFeed> poses);
+
+    // GUI thread, for the end-to-end checks. requestCapture() asks the renderer to read back
+    // its next draw; takeCapture() returns it once it has arrived (a frame or two later).
+    void requestCapture();
+    [[nodiscard]] std::optional<FrameCapture> takeCapture();
 
     // GUI thread. The statistics as of the last refresh (at most a quarter second old).
     [[nodiscard]] const msc::video::PresentationStats& stats() const noexcept { return stats_; }

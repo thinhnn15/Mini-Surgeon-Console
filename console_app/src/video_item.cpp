@@ -15,6 +15,8 @@
 #include <cstddef>
 #include <cstdint>
 #include <memory>
+#include <mutex>
+#include <optional>
 #include <utility>
 
 namespace {
@@ -58,6 +60,9 @@ QShader loadShader(const QString& resourcePath) {
 
 }  // namespace
 
+VideoStatsChannel::VideoStatsChannel() : readback(std::make_unique<QRhiReadbackResult>()) {}
+VideoStatsChannel::~VideoStatsChannel() = default;
+
 // Outside the anonymous namespace so VideoItem can name it as a friend.
 class VideoRenderer final : public QQuickRhiItemRenderer {
 protected:
@@ -73,6 +78,8 @@ private:
     void createHudPipeline(QRhiCommandBuffer* cb);
     // The marker for the frame on screen, and its uniforms into `updates` if it is to be drawn.
     [[nodiscard]] bool prepareHud(const msc::video::PixelRect& box, QRhiResourceUpdateBatch*& updates);
+    // If a capture was asked for: a batch, to run after the pass, that reads this draw back.
+    [[nodiscard]] QRhiResourceUpdateBatch* readBackIfAsked();
     // Render thread, right after the window's swap (Present) has returned.
     void onSwapped();
 
@@ -86,6 +93,11 @@ private:
     msc::hud::HudOverlay overlay_;
     std::uint64_t shownSequence_ = 0;
     msc::Nanoseconds shownCapture_{0};
+    // What prepareHud decided in this draw, and since when it has decided the same, for a
+    // capture of it.
+    msc::Nanoseconds hudDrawnAt_{0};
+    msc::hud::HudState hudDrawn_ = msc::hud::HudState::NoData;
+    msc::Nanoseconds hudSince_{0};
 
     // REQ-VID-002: timings along the path, and where the statistics go.
     msc::video::PresentationTracker tracker_;
@@ -330,8 +342,13 @@ bool VideoRenderer::prepareHud(const msc::video::PixelRect& box, QRhiResourceUpd
     } else {
         const double aspect = static_cast<double>(texture_->pixelSize().width()) /
                               static_cast<double>(texture_->pixelSize().height());
-        marker = overlay_.markerFor(shownSequence_, shownCapture_, clock_->now(), aspect, mode);
+        hudDrawnAt_ = clock_->now();
+        marker = overlay_.markerFor(shownSequence_, shownCapture_, hudDrawnAt_, aspect, mode);
     }
+    if (marker.state != hudDrawn_) {
+        hudSince_ = clock_ != nullptr ? clock_->now() : msc::Nanoseconds{0};
+    }
+    hudDrawn_ = marker.state;
     if (channel_) {
         channel_->hudState.store(marker.state, std::memory_order_relaxed);
     }
@@ -365,6 +382,42 @@ bool VideoRenderer::prepareHud(const msc::video::PixelRect& box, QRhiResourceUpd
     }
     updates->updateDynamicBuffer(hudUniforms_.get(), 0, sizeof(uniforms), &uniforms);
     return true;
+}
+
+QRhiResourceUpdateBatch* VideoRenderer::readBackIfAsked() {
+    // One read-back at a time: the result object is reused once QRhi has completed it.
+    if (!channel_ || !hasFrame_ || channel_->readbackPending ||
+        !channel_->captureRequested.exchange(false, std::memory_order_relaxed)) {
+        return nullptr;
+    }
+    channel_->readbackPending = true;
+    FrameCapture capture;
+    capture.sequence = shownSequence_;
+    capture.captureTime = shownCapture_;
+    capture.drawnAt = hudDrawnAt_;
+    capture.hud = hudDrawn_;
+    capture.hudSince = hudSince_;
+    // OpenGL's framebuffer has its first row at the bottom.
+    const bool bottomUp = rhi_->isYUpInFramebuffer();
+    // Called by QRhi on this thread when the pixels are there, possibly a frame later. It only
+    // touches the channel, never the renderer: the callback lives inside the channel, so the
+    // plain pointer cannot dangle, and a shared one would keep the channel alive for ever.
+    channel_->readback->completed = [capture, bottomUp, channel = channel_.get()]() mutable {
+        channel->readbackPending = false;
+        const QRhiReadbackResult& result = *channel->readback;
+        if (result.format != QRhiTexture::RGBA8 || result.pixelSize.isEmpty()) {
+            return;
+        }
+        const QImage wrapped(reinterpret_cast<const uchar*>(result.data.constData()),
+                             result.pixelSize.width(), result.pixelSize.height(), QImage::Format_RGBA8888);
+        capture.image = bottomUp ? wrapped.mirrored() : wrapped.copy();  // a copy: `result` is reused
+        const std::lock_guard lock(channel->captureMutex);
+        channel->capture = std::move(capture);
+    };
+    QRhiResourceUpdateBatch* batch = rhi_->nextResourceUpdateBatch();
+    batch->readBackTexture(QRhiReadbackDescription(sampleCount_ > 1 ? resolveTexture() : colorTexture()),
+                           channel_->readback.get());
+    return batch;
 }
 
 void VideoRenderer::render(QRhiCommandBuffer* cb) {
@@ -431,7 +484,7 @@ void VideoRenderer::render(QRhiCommandBuffer* cb) {
             cb->draw(4);
         }
     }
-    cb->endPass();
+    cb->endPass(readBackIfAsked());
 
     if (source_) {
         update();  // render again next frame: there will be a new picture
@@ -488,6 +541,15 @@ void VideoItem::setSourceStatus(const QString& status) {
     }
     sourceStatus_ = status;
     emit sourceStatusChanged();
+}
+
+void VideoItem::requestCapture() {
+    channel_->captureRequested.store(true, std::memory_order_relaxed);
+}
+
+std::optional<FrameCapture> VideoItem::takeCapture() {
+    const std::lock_guard lock(channel_->captureMutex);
+    return std::exchange(channel_->capture, std::nullopt);
 }
 
 void VideoItem::setPoseFeed(std::shared_ptr<msc::hud::PoseFeed> poses) {
