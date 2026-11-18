@@ -81,6 +81,7 @@ To run the exe from Explorer, copy Qt next to it once:
 common/        plain C++: CRC-32, clock, triple buffer / latest-value mailbox, latency percentiles
 video/         plain C++: Frame, test pattern with a sequence barcode, SyntheticSource, letterbox,
                presentation timing, YUV to RGBA conversion, frozen-picture rule
+comms/         plain C++: the arm link's wire protocol (session, sequence, timestamp, CRC-32), sequence filter
 arm_sim/       the simulated arm process (plain C++, no Qt)
 console_app/   the Qt Quick console; VideoItem draws the video with QRhi (ADR 0003), CameraSource
 cmake/         warnings, sanitizers, GoogleTest

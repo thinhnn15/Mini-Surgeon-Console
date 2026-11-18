@@ -81,4 +81,4 @@ jobs:
       - name: Configure (for compile_commands.json)
         run: cmake --preset linux-asan
       - name: clang-tidy
-        run: git ls-files 'common/*.cpp' 'video/*.cpp' 'arm_sim/*.cpp' | xargs clang-tidy -p build/linux-asan --quiet
+        run: git ls-files 'common/*.cpp' 'video/*.cpp' 'comms/*.cpp' 'arm_sim/*.cpp' | xargs clang-tidy -p build/linux-asan --quiet
