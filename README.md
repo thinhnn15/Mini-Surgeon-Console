@@ -57,7 +57,8 @@ cmake --preset linux-asan && cmake --build --preset linux-asan && ctest --preset
 ## Layout
 
 ```
-common/        plain C++: CRC-32, clock (later: protocol, ring buffer)
+common/        plain C++: CRC-32, clock, triple buffer / latest-value mailbox (later: protocol)
+video/         plain C++: Frame, test pattern with a sequence barcode, SyntheticSource
 arm_sim/       the simulated arm process (plain C++, no Qt)
 console_app/   the Qt Quick console
 cmake/         warnings, sanitizers, GoogleTest
