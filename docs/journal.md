@@ -55,3 +55,25 @@ Template:
 - Cause: aliasing. The grab's own draw was always the 31st, exactly the one where the sabotaged renderer took a fresh frame. A fault with a period can hide from a test that samples at the same period.
 - Fix: stagger the waits (30, 37, 44, 51, 58 frames). The same sabotage then failed 4/4; a period of 23 and a renderer that forgets `update()` (the window stops presenting, the check times out) fail too.
 - Interview sentence: "My screen check sampled every 30 frames and a fault that repeated every 30 frames slipped through; re-running the sabotage after each change of the test is what caught it."
+
+## 2026-11-18 · M2.4 · The latency figures stayed at zero: synchronize() is not called every frame
+- Symptom: the first `--measure-latency` run reported 0 frames presented in 5 s, while `--check-video` in the same session saw the window present about 30 frames per second.
+- Cause: the renderer handed its statistics to the item in `synchronize()`, assuming that runs every frame. It does not. The renderer keeps itself going with `QQuickRhiItemRenderer::update()`, which by design only schedules another `render()` (continuous rendering must not block the GUI thread every frame); `synchronize()` runs only when the GUI side calls `QQuickItem::update()`. After the reset at the end of the warm-up, nothing on the GUI side changed, so the statistics never came back.
+- Fix: a `LatestValue<PresentationStats>` mailbox (the REQ-VID-001 one from M2.1) shared by item and renderer. The render thread publishes four times a second from the `frameSwapped` handler; the GUI thread reads it on a timer. A reset request goes the other way as an `std::atomic<bool>`. The source and clock still go over in `synchronize()`, which is right for them: they only change when the GUI side changes something.
+- Interview sentence: "I assumed Qt Quick's synchronize step ran every frame and my stats never arrived; for data that flows continuously from the render thread I use a lock-free mailbox instead of piggy-backing on Qt's sync, and I compared against a second measurement path to see the bug was mine, not the machine's."
+
+## 2026-11-18 · M2.4 · Capture-to-present latency, D3D11 vs D3D12, vsync on vs off
+- Setup: Debug build, synthetic 1280x720 source at 60 fps, `console_app --measure-latency=8`, two runs each (they agreed within 0.3 ms at p50). **Measured over Remote Desktop**: the window was on the Microsoft Remote Display Adapter at 1920x1080 and 32 Hz, not on the local 60 Hz monitor, so the vsync-on figures are for a 32 Hz display. To repeat on the local monitor.
+
+| API | vsync | render fps | video fps | dropped | capture→present p50 / p99 / max | capture→upload p50 / p99 |
+| --- | --- | --- | --- | --- | --- | --- |
+| D3D11 | on | 32.0 | 32.0 | ~47 % | 9.5 / 18.5 / 19.1 ms | 9.1 / 18.0 ms |
+| D3D12 | on | 32.0 | 32.0 | ~47 % | 10.3 / 18.9 / 19.4 ms | 9.6 / 18.1 ms |
+| D3D11 | off | ~9 300 | 60.0 | 0 | 1.25 / 2.75 / 3.0 ms | 0.85 / 2.25 ms |
+| D3D12 | off | ~3 300 | 59–60 | 0–10 | 1.4 / 3.4 / 4.1 ms | 0.95 / 2.9 ms |
+
+- Where the time goes, with vsync: almost all of it is **capture→upload**, the frame waiting for the next draw. The renderer always takes the newest frame, so a frame's age when it is drawn is spread over one source period (16.7 ms): p50 ≈ half of that plus ~1 ms of drawing the test pattern, p99 ≈ the whole period. Upload→present is ~0.4 ms: `Present()` only queues the frame, it returns before the frame is on screen.
+- What is not in these numbers: after `Present()` the frame still waits in the swap chain queue (up to 2 frames, `max frame latency = 2` in the D3D11 log) for vsync, then the compositor, scan-out and the panel. That remainder is the difference between capture-to-present and glass-to-glass, and needs a camera pointed at the screen (M2.5). With vsync off it shrinks but the picture can tear.
+- Dropped frames with vsync on (~47 %) are the newest-frame rule doing its job: 60 frames per second in, 32 shown. A display slower than the source must drop; queueing them instead would add latency every frame (RISK-003).
+- D3D11 vs D3D12: the same with vsync on (D3D12 about 0.5–0.8 ms higher at p50). Uncapped, Qt's D3D12 backend draws about a third as many frames per second, i.e. more CPU time per frame; irrelevant at 60 Hz, but D3D11 stays the default.
+- Interview sentence: "At 60 fps the latency floor with a newest-frame mailbox is about half a source period at p50 and a whole one at p99 — the render path itself was under half a millisecond — so the next win is a faster camera or presenting in sync with capture, not a faster renderer."

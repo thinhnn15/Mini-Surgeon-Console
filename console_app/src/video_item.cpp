@@ -6,10 +6,12 @@
 #include <rhi/qrhi.h>
 #include <QFile>
 #include <QMatrix4x4>
+#include <QQuickWindow>
 #include <QVector3D>
 
 #include <algorithm>
 #include <array>
+#include <chrono>
 #include <cstddef>
 #include <cstdint>
 #include <memory>
@@ -19,6 +21,10 @@ namespace {
 
 using msc::video::Frame;
 using msc::video::FrameSource;
+using namespace std::chrono_literals;
+
+// How often the renderer turns its timings into statistics for the GUI.
+constexpr auto kStatsInterval = 250ms;
 
 // Bars around the picture. Black, as on a real endoscope monitor: anything brighter pulls
 // the eye away from the image.
@@ -38,6 +44,9 @@ QShader loadShader(const QString& resourcePath) {
     return QShader::fromSerialized(file.readAll());
 }
 
+}  // namespace
+
+// Outside the anonymous namespace so VideoItem can name it as a friend.
 class VideoRenderer final : public QQuickRhiItemRenderer {
 protected:
     void initialize(QRhiCommandBuffer* cb) override;
@@ -49,9 +58,21 @@ private:
     // Makes the texture match the frame size. Returns false if it could not be created.
     bool ensureTextureSize(const QSize& size);
     void uploadFrame(const Frame& frame, QRhiResourceUpdateBatch* updates);
+    // Render thread, right after the window's swap (Present) has returned.
+    void onSwapped();
 
     std::shared_ptr<FrameSource> source_;
+    const msc::Clock* clock_ = nullptr;
     bool hasFrame_ = false;  // a frame has been uploaded since the source was set
+
+    // REQ-VID-002: timings along the path, and where the statistics go.
+    msc::video::PresentationTracker tracker_;
+    std::shared_ptr<VideoStatsChannel> channel_;
+    msc::Nanoseconds lastStatsAt_{0};
+    // Receives QQuickWindow::frameSwapped. Created on the render thread, so the direct
+    // connection runs there; deleting it with the renderer disconnects it.
+    QQuickWindow* window_ = nullptr;
+    std::unique_ptr<QObject> swapListener_;
 
     QRhi* rhi_ = nullptr;
     int sampleCount_ = 0;
@@ -149,12 +170,41 @@ void VideoRenderer::createPipeline(QRhiCommandBuffer* cb) {
 
 // GUI thread blocked, render thread running: the only moment both sides may be touched.
 void VideoRenderer::synchronize(QQuickRhiItem* item) {
-    const auto& source = static_cast<VideoItem*>(item)->frameSource();
-    if (source != source_) {
+    auto* video = static_cast<VideoItem*>(item);
+    if (video->source_ != source_ || video->clock_ != clock_) {
         // If this drops the last reference, the old source stops its thread here, on the
         // render thread. That is fine: stop() only joins a thread that is already finishing.
-        source_ = source;
+        source_ = video->source_;
+        clock_ = video->clock_;
         hasFrame_ = false;
+        tracker_.reset();
+    }
+    channel_ = video->channel_;
+
+    // frameSwapped is emitted on the render thread after the swap: the "present" timestamp.
+    if (video->window() != window_) {
+        window_ = video->window();
+        swapListener_ = std::make_unique<QObject>();
+        if (window_ != nullptr) {
+            QObject::connect(
+                window_, &QQuickWindow::frameSwapped, swapListener_.get(), [this] { onSwapped(); },
+                Qt::DirectConnection);
+        }
+    }
+}
+
+void VideoRenderer::onSwapped() {
+    if (clock_ == nullptr) {
+        return;
+    }
+    if (channel_ && channel_->resetRequested.exchange(false, std::memory_order_relaxed)) {
+        tracker_.reset();
+    }
+    const msc::Nanoseconds now = clock_->now();
+    tracker_.swapped(now);
+    if (channel_ && now - lastStatsAt_ >= kStatsInterval) {
+        channel_->stats.publish(tracker_.takeStats(now));
+        lastStatsAt_ = now;
     }
 }
 
@@ -195,6 +245,9 @@ void VideoRenderer::render(QRhiCommandBuffer* cb) {
             updates = rhi_->nextResourceUpdateBatch();
             uploadFrame(frame, updates);
             hasFrame_ = true;
+            if (clock_ != nullptr) {
+                tracker_.frameUploaded(frame.sequence, frame.captureTime, clock_->now());
+            }
         }
     }
 
@@ -221,16 +274,35 @@ void VideoRenderer::render(QRhiCommandBuffer* cb) {
     }
 }
 
-}  // namespace
+VideoItem::VideoItem(QQuickItem* parent) : QQuickRhiItem(parent) {
+    // The renderer publishes statistics every kStatsInterval; pick them up at the same pace.
+    statsTimer_.setInterval(kStatsInterval);
+    connect(&statsTimer_, &QTimer::timeout, this, [this] {
+        if (channel_->stats.read(stats_)) {
+            emit statsChanged();
+        }
+    });
+    statsTimer_.start();
+}
 
-VideoItem::VideoItem(QQuickItem* parent) : QQuickRhiItem(parent) {}
-
-void VideoItem::setFrameSource(std::shared_ptr<FrameSource> source) {
-    if (source == source_) {
+void VideoItem::setFrameSource(std::shared_ptr<FrameSource> source, const msc::Clock& clock) {
+    if (source == source_ && &clock == clock_) {
         return;
     }
     source_ = std::move(source);
+    clock_ = &clock;
     update();  // kick the renderer; from then on it keeps itself going
+}
+
+void VideoItem::resetStats() {
+    // Relaxed is enough: the flag carries no other data with it, and the renderer only needs
+    // to see it eventually (at its next swap).
+    channel_->resetRequested.store(true, std::memory_order_relaxed);
+    // Drop anything published before the reset, so stats() never mixes old and new.
+    msc::video::PresentationStats discarded;
+    static_cast<void>(channel_->stats.read(discarded));
+    stats_ = {};
+    emit statsChanged();
 }
 
 QQuickRhiItemRenderer* VideoItem::createRenderer() {
