@@ -9,7 +9,7 @@ Window {
     color: "#101418"
     title: qsTr("Mini Surgeon Console")
 
-    // M2: the endoscope video and the HUD overlay are drawn here by a QQuickRhiItem.
+    // M2: the endoscope video, drawn by VideoItem (a QQuickRhiItem). M5 adds the HUD overlay.
     Rectangle {
         id: videoArea
 
@@ -23,11 +23,29 @@ Window {
         color: "#1b2229"
         radius: 6
 
+        // The endoscope view. main.cpp finds it by objectName and gives it the frame source.
+        VideoItem {
+            id: video
+
+            objectName: "video"
+            anchors {
+                fill: parent
+                margins: 6
+            }
+        }
+
+        // The software renderer has no GPU API, so it cannot draw a QQuickRhiItem: the video
+        // area would stay black, which looks like a dead camera. Say what is going on instead.
         Text {
             anchors.centerIn: parent
-            text: qsTr("Video — M2")
-            color: "#6b7a89"
-            font.pixelSize: 22
+            width: parent.width - 48
+            visible: video.GraphicsInfo.api === GraphicsInfo.Software
+            horizontalAlignment: Text.AlignHCenter
+            wrapMode: Text.WordWrap
+            text: qsTr("No video: the software renderer is active, and video needs a GPU graphics backend "
+                       + "(Direct3D, Vulkan, Metal or OpenGL).")
+            color: "#f0b429"
+            font.pixelSize: 18
         }
     }
 
@@ -87,7 +105,7 @@ Window {
                 left: parent.left
                 leftMargin: 12
             }
-            text: qsTr("M1 skeleton · v%1").arg(Qt.application.version)
+            text: qsTr("M2 video · v%1").arg(Qt.application.version)
             color: "#6b7a89"
             font.pixelSize: 13
         }
