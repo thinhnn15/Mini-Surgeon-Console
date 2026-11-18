@@ -29,7 +29,7 @@ struct ArmControllerConfig {
     unsigned missedHeartbeats = 3;
     // Told about state changes ("holding: ..."), for the operator's log. Called on the loop's
     // thread; may be empty.
-    std::function<void(std::string_view)> log;
+    std::function<void(std::string_view)> log{};
 };
 
 struct ArmControllerStats {
