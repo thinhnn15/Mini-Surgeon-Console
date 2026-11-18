@@ -12,9 +12,6 @@ add_library(msc::video ALIAS msc_video)
 target_include_directories(msc_video PUBLIC include)
 target_link_libraries(msc_video PUBLIC msc::common Threads::Threads)
 msc_set_warnings(msc_video)
-if(WIN32)
-    target_link_libraries(msc_video PRIVATE winmm)  # timeBeginPeriod, see synthetic_source.cpp
-endif()
 
 if(BUILD_TESTING)
     add_executable(msc_video_tests
