@@ -15,6 +15,7 @@
 #include <cstdint>
 #include <functional>
 #include <optional>
+#include <span>
 #include <string_view>
 #include <variant>
 
@@ -102,8 +103,10 @@ public:
 
 private:
     void receiveAll(Nanoseconds now);
+    std::optional<comms::Packet> nextPacket(std::span<std::byte> buffer, bool& empty);
     using Command = std::variant<comms::JointCommand, comms::HoldCommand>;
-    void updateState(Nanoseconds now, const std::optional<Command>& command);
+    // True if `command` was applied (and is to be acknowledged).
+    bool updateState(Nanoseconds now, const std::optional<Command>& command);
     void send(Nanoseconds now, const comms::Message& message, std::uint64_t& counter);
     void log(std::string_view message) const;
 

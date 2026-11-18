@@ -59,7 +59,9 @@ void TeleopModel::tick() {
     sample.pose[1] = static_cast<float>(handY_ * kHandRange);
     sample.clutch = clutch_;
     sample.time = clock_->now();
-    core_->submitHand(sample);
+    if (!stalled_) {
+        core_->submitHand(sample);
+    }
 
     if (++ticksSinceRefresh_ >= kRefreshEvery) {
         ticksSinceRefresh_ = 0;

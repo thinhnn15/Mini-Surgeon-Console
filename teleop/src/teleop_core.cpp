@@ -39,7 +39,6 @@ void TeleopCore::request(Request request) noexcept {
 FaultSet TeleopCore::presentFaults(Nanoseconds now) const {
     FaultSet present;
     const StateKind kind = kindOf(machine_.state());
-    const bool operating = kind == StateKind::Engaged || kind == StateKind::Paused;
 
     if (link_.link == comms::LinkState::Lost) {
         present |= faultSet(FaultCode::ArmLinkLost);
@@ -47,8 +46,18 @@ FaultSet TeleopCore::presentFaults(Nanoseconds now) const {
     if (!lastHand_ || now - lastHand_->time > config_.handTimeout) {
         present |= faultSet(FaultCode::HandInputStale);
     }
-    // Only while we are sending commands that should be acknowledged.
-    if (operating && now - lastAckChange_ > config_.ackTimeout) {
+    // In every state: the console always sends a command (a move, or a hold), so acknowledgements
+    // must always keep coming. Checked only while operating at first, which let a reset through
+    // while every command was still being refused by the arm (found by the fault injector, M4.4).
+    if (now - lastAckChange_ > config_.ackTimeout) {
+        present |= faultSet(FaultCode::CommandNotAcknowledged);
+    }
+    // In Fault, a reset needs fresh evidence that the arm is taking our commands again: an
+    // acknowledgement that arrived after the fault. "No watchdog has fired yet" is not enough:
+    // the arm stopping on its own is seen in ~40 ms, the acknowledgement watchdog needs 100, and
+    // a reset in between went through while every command was still being refused (M4.4).
+    if (const auto* fault = std::get_if<Fault>(&machine_.state());
+        fault != nullptr && lastAckChange_ <= fault->since) {
         present |= faultSet(FaultCode::CommandNotAcknowledged);
     }
     // Engaged, we send moves: the arm must be following them. Holding for longer than it takes
@@ -73,7 +82,6 @@ FaultSet TeleopCore::notReadyToEngage() const {
 }
 
 void TeleopCore::apply(const Event& event, Nanoseconds now) {
-    const StateKind before = kindOf(machine_.state());
     const Result result = machine_.handle(event, now);
     if (result.outcome == Outcome::Refused) {
         lastRefusal_ = result.why;
@@ -83,9 +91,6 @@ void TeleopCore::apply(const Event& event, Nanoseconds now) {
     const StateKind after = kindOf(machine_.state());
     if (after == StateKind::Engaged && result.outcome == Outcome::Changed) {
         enteredEngaged_ = now;  // engage or clutch release: the arm gets a moment to follow
-    }
-    if (before == StateKind::Idle && after == StateKind::Engaged) {
-        lastAckChange_ = now;  // acknowledgements are counted from the moment we start sending
     }
 }
 

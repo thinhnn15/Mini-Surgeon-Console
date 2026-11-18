@@ -27,7 +27,7 @@ qt_add_qml_module(console_app
     URI MiniConsole
     VERSION 1.0
     QML_FILES qml/Main.qml
-    SOURCES src/video_item.hpp src/video_item.cpp src/teleop_model.hpp src/teleop_model.cpp)
+    SOURCES src/video_item.hpp src/video_item.cpp src/teleop_model.hpp src/teleop_model.cpp src/fault_injector.hpp src/fault_injector.cpp)
 
 # Vulkan-style GLSL compiled at build time by qsb into one .qsb per shader, holding SPIR-V,
 # HLSL, MSL and GLSL variants, so the same file serves every QRhi backend.

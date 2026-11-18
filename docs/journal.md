@@ -189,3 +189,31 @@ Template:
 - Without a desktop (remote session), `--screenshot=FILE` with the offscreen platform shows the layout. The offscreen platform has no fonts until `QT_QPA_FONTDIR` points at some.
 - A test from M3.4 failed under TSan on Linux, reading arm telemetry at 0.12 rad when the arm had long been at 0.5. The fake console had let a second's worth of telemetry (1000 datagrams) pile up unread. When a UDP receive buffer is full the kernel drops the new datagrams, so the buffer kept the oldest ~270, and "the newest in the buffer" was from the start of the move. That is the opposite of the newest-wins rule everywhere else in this console. `ArmLink` is safe because it drains the socket every 10 ms; the test now reads as it goes too. It passed on Windows and in earlier Linux runs only because of buffer sizes and timing.
 - Interview sentence: "A full UDP receive buffer drops the newest datagrams, not the oldest, so a reader that falls behind ends up with the oldest data, exactly the wrong way round for control; the fix is to drain every period, which my link did and my test did not."
+
+## 2026-11-18 · M4.4 · The fault injector found two safety holes the unit tests had not
+- `safety_check` starts `arm_sim` as a real process, runs the console's arm link and teleop core on their own threads, and for every fault does the whole chain. It engages and moves, injects, and expects Fault with the right code. A reset while the fault is still injected must be refused. After clearing, the arm must be stopped and holding, the reset must be accepted and lead to Idle, and the arm must stay put.
+- Detection times (3 runs, Windows, Debug):
+
+| Injected | Detected as | After |
+| --- | --- | --- |
+| cable pulled (nothing in or out) | arm link lost | 33–43 ms (the arm held on its own at 30 ms) |
+| one bit flipped in every packet to the arm | arm stopped on its own | 37–42 ms |
+| hand controller frozen | hand controller not responding | 103–109 ms |
+| video stopped | video not live | ~5 ms |
+| generic | injected fault | ~5 ms |
+
+- The slowest is the frozen hand (100 ms by design: a hand that is held still must not fault). The most dangerous is the one nobody would notice, commands not reaching the arm, and it is also the one that found the holes.
+- Hole 1: the arm acknowledged commands it had ignored. `lastCommandSequence` was updated when a command was received, also when it was then ignored because the console was not alive. The telemetry claimed "applied" for a command that never moved anything. Now it is updated only when the command is applied (test `REQ_SAF_001_AnIgnoredCommandIsNotAcknowledged`).
+- Hole 2: a reset went through while every command was still being refused. With corruption on, the console faulted at ~40 ms (the arm stopped on its own) and the scripted reset came at ~45 ms. No watchdog saw a cause at that moment:
+  - "arm holding on its own" only means something while engaged;
+  - the acknowledgement watchdog only ran while operating;
+  - and the acknowledgement watchdog needs 100 ms anyway.
+
+  The reset was accepted with the link still broken. Two changes:
+  - acknowledgements are watched in every state, because the console always sends a move or a hold;
+  - a reset needs fresh evidence of health, an acknowledgement that arrived after the fault, not just "no watchdog has fired yet".
+
+  Unit test `REQ_SAF_002_ResetIsRefusedWhileTheArmStillDoesNotAcknowledge`.
+- Both holes were in code with green unit tests, and both were about the gap between two timers or between "received" and "applied". Only running the real pieces together, with the fault actually happening, showed them.
+- Also: `.clang-tidy`'s readability-redundant-member-init wanted the `{}` initializers removed that GCC's -Wmissing-field-initializers requires. GCC wins (it breaks the build), so the check is off, with the reason in the file.
+- Interview sentence: "My fault injector found that a reset was accepted 45 ms into a fault while the arm was still refusing every command — no watchdog had fired yet — so I changed the rule from 'no fault visible' to 'fresh evidence of health since the fault', and found on the way that the arm was acknowledging commands it had ignored."

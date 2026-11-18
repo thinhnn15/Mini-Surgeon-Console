@@ -60,56 +60,72 @@ void ArmController::tick() {
     ++stats_.ticks;
 }
 
+// One datagram from the socket, decoded and filtered: the packet if it is new and from the
+// console. `empty` says the socket had nothing more; otherwise nothing means it was refused
+// (and counted).
+std::optional<comms::Packet> ArmController::nextPacket(std::span<std::byte> buffer, bool& empty) {
+    const comms::ReceiveResult r = socket_.receive(buffer, 0ms);
+    empty = r.status != comms::ReceiveStatus::Datagram;  // an error is treated the same: next tick
+    if (empty) {
+        return std::nullopt;
+    }
+    if (r.truncated) {
+        ++stats_.refused[static_cast<std::size_t>(comms::DecodeError::BadLength)];
+        return std::nullopt;
+    }
+    const comms::DecodeResult decoded = comms::decode(buffer.first(r.size));
+    if (const auto* error = std::get_if<comms::DecodeError>(&decoded)) {
+        ++stats_.refused[static_cast<std::size_t>(*error)];
+        return std::nullopt;
+    }
+    const auto& packet = std::get<comms::Packet>(decoded);
+    if (std::holds_alternative<comms::JointTelemetry>(packet.message)) {
+        return std::nullopt;  // not for an arm
+    }
+    if (console_.check(packet.session, packet.sequence) != comms::SequenceVerdict::Accepted) {
+        ++stats_.oldOrDuplicate;
+        return std::nullopt;
+    }
+    replyTo_ = r.from;
+    return packet;
+}
+
 void ArmController::receiveAll(Nanoseconds now) {
     std::array<std::byte, comms::kMaxPacketSize> buffer{};
     std::optional<Command> newest;
-    for (;;) {
-        const comms::ReceiveResult r = socket_.receive(buffer, 0ms);
-        if (r.status != comms::ReceiveStatus::Datagram) {
-            break;  // nothing more waiting (an error is treated the same: try again next tick)
-        }
-        if (r.truncated) {
-            ++stats_.refused[static_cast<std::size_t>(comms::DecodeError::BadLength)];
+    std::uint32_t newestSequence = 0;
+    for (bool empty = false; !empty;) {
+        const std::optional<comms::Packet> packet = nextPacket(buffer, empty);
+        if (!packet) {
             continue;
         }
-        const comms::DecodeResult decoded = comms::decode(std::span(buffer).first(r.size));
-        if (const auto* error = std::get_if<comms::DecodeError>(&decoded)) {
-            ++stats_.refused[static_cast<std::size_t>(*error)];
-            continue;
-        }
-        const auto& packet = std::get<comms::Packet>(decoded);
-        if (std::holds_alternative<comms::JointTelemetry>(packet.message)) {
-            continue;  // not for an arm
-        }
-        if (console_.check(packet.session, packet.sequence) != comms::SequenceVerdict::Accepted) {
-            ++stats_.oldOrDuplicate;
-            continue;
-        }
-        replyTo_ = r.from;
-        if (std::holds_alternative<comms::Heartbeat>(packet.message)) {
+        if (std::holds_alternative<comms::Heartbeat>(packet->message)) {
             if (const auto gap = heartbeat_.silence(now); gap && *gap <= heartbeat_.limit()) {
                 stats_.longestHeartbeatGap = std::max(stats_.longestHeartbeatGap, *gap);
             }
             heartbeat_.received(now);
             ++stats_.heartbeatsReceived;
-        } else if (const auto* move = std::get_if<comms::JointCommand>(&packet.message)) {
-            if (newest) {
-                ++stats_.commandsReplaced;
-            }
-            newest = *move;
-            lastCommandSequence_ = packet.sequence;
-        } else if (std::holds_alternative<comms::HoldCommand>(packet.message)) {
-            if (newest) {
-                ++stats_.commandsReplaced;
-            }
-            newest = comms::HoldCommand{};
-            lastCommandSequence_ = packet.sequence;
+            continue;
         }
+        // A move or a hold: only the newest of the tick counts.
+        if (newest) {
+            ++stats_.commandsReplaced;
+        }
+        if (const auto* move = std::get_if<comms::JointCommand>(&packet->message)) {
+            newest = *move;
+        } else {
+            newest = comms::HoldCommand{};
+        }
+        newestSequence = packet->sequence;
     }
-    updateState(now, newest);
+    // Acknowledged only if applied: a command ignored because the console is not alive must not
+    // look confirmed in the telemetry.
+    if (updateState(now, newest)) {
+        lastCommandSequence_ = newestSequence;
+    }
 }
 
-void ArmController::updateState(Nanoseconds now, const std::optional<Command>& command) {
+bool ArmController::updateState(Nanoseconds now, const std::optional<Command>& command) {
     const comms::LinkState link = heartbeat_.state(now);
     if (link != link_) {
         if (link == comms::LinkState::Lost) {
@@ -131,10 +147,10 @@ void ArmController::updateState(Nanoseconds now, const std::optional<Command>& c
             ++stats_.holds;
             log("holding position until the console is back and sends a new command");
         }
-        return;
+        return false;
     }
     if (!command) {
-        return;
+        return false;
     }
     if (std::holds_alternative<comms::HoldCommand>(*command)) {
         // The console says nobody is driving: brake and stay. From Idle there is nothing to stop.
@@ -144,7 +160,7 @@ void ArmController::updateState(Nanoseconds now, const std::optional<Command>& c
             log("hold command from the console: holding position");
         }
         ++stats_.holdCommands;
-        return;
+        return true;
     }
     if (const auto* move = std::get_if<comms::JointCommand>(&*command)) {
         if (state_ == comms::ArmState::Holding) {
@@ -154,6 +170,7 @@ void ArmController::updateState(Nanoseconds now, const std::optional<Command>& c
         state_ = comms::ArmState::Following;
         ++stats_.commandsApplied;
     }
+    return true;
 }
 
 void ArmController::send(Nanoseconds now, const comms::Message& message, std::uint64_t& counter) {

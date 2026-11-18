@@ -27,7 +27,7 @@ every fault ends in a safe state that only an operator reset can leave.
 - [x] **M1** Skeleton: CMake, Qt 6 QML app, `arm_sim`, Google Test, CI on Windows and Linux, sanitizers
 - [x] **M2** Video path: capture thread, latest-frame mailbox, `QQuickRhiItem`, latency measurement, webcam, frozen-picture warning
 - [x] **M3** `arm_sim` at 1 kHz, UDP protocol, heartbeat in both directions
-- [ ] **M4** Teleop state machine (`std::variant`), watchdog, fault injector, tests with a fake clock
+- [x] **M4** Teleop state machine (`std::variant`), watchdog, fault injector, tests with a fake clock
 - [ ] **M5** HUD overlay synchronised to the video by timestamp, hidden when stale
 - [ ] **M6** Soak test, profiling, risk table, requirement IDs traced to tests
 
@@ -78,6 +78,13 @@ stopping on its own, video not live) turns the panel red and the arm holds; Rese
 accepted once the cause is gone, and leads to Idle. `console_app --hand-demo` drives the hand
 from a script instead of the mouse.
 
+Fault injector (testing): the chips at the right of the status bar turn a fault on and off
+(`link` = cable pulled, `corrupt` = one bit flipped in every packet to the arm, `hand` = hand
+controller frozen, `video` = video stopped, `fault` = generic). Scripted:
+`console_app --hand-demo --inject=link@4-6,video@10-11`. `safety_check` runs every one of them
+against a real `arm_sim` and checks the whole chain (fault, arm holds, reset refused, reset
+accepted, arm stays put).
+
 The arm-side safety demo (ADR 0001): with the arm following, kill the console (Task Manager, or
 `taskkill /F /IM console_app.exe`): within 30 ms `arm_sim` prints "console link lost" and
 "holding position", brakes and stays there. `link_check` tests exactly that with two real
@@ -102,6 +109,7 @@ video/         plain C++: Frame, test pattern with a sequence barcode, Synthetic
                presentation timing, YUV to RGBA conversion, frozen-picture rule
 comms/         plain C++: the arm link's wire protocol (session, sequence, timestamp, CRC-32), sequence filter,
                UDP socket (Winsock / BSD sockets)
+tools/         end-to-end checks with real processes: link_check, safety_check
 teleop/        plain C++: the teleop state machine (std::variant), clutch and motion scaling, the teleop
                core (fixed-rate thread, watchdogs)
 arm_sim/       the simulated arm process (plain C++, no Qt): joint model, 1 kHz controller

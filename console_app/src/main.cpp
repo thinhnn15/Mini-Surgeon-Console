@@ -1,3 +1,4 @@
+#include "fault_injector.hpp"
 #include "freeze_check.hpp"
 #include "latency_report.hpp"
 #include "msc/common/clock.hpp"
@@ -215,6 +216,18 @@ int main(int argc, char* argv[]) {
         };
         QObject::connect(video, &VideoItem::videoStateChanged, teleopModel, updateVideo);
         updateVideo();
+
+        // M4.4: faults on purpose, from the status bar or --inject=NAME@START[-END],...
+        if (auto* faults = window->findChild<FaultInjector*>(QStringLiteral("faults")); faults != nullptr) {
+            faults->setTargets(&*armLink, &*teleop, teleopModel, source.get());
+            if (const std::optional<QString> script = optionValue(args, QStringLiteral("--inject"))) {
+                QString error;
+                if (!faults->schedule(*script, &error)) {
+                    qCritical("console_app: --inject: %s", qPrintable(error));
+                    return 1;
+                }
+            }
+        }
     }
     std::function<void()> reportSource;
     if (synthetic) {
