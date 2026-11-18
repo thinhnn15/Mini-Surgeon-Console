@@ -30,8 +30,9 @@ jobs:
         uses: jurplel/install-qt-action@v4
         with:
           version: '6.8.3'
-          # Not in the default install; qt_add_shaders (qsb) needs it for the video shaders.
-          modules: 'qtshadertools'
+          # Not in the default install. qtshadertools: qt_add_shaders (qsb) for the video
+          # shaders. qtmultimedia: the camera source (CI has no camera; it tests the fallback).
+          modules: 'qtshadertools qtmultimedia'
           cache: true
 
       - name: Configure

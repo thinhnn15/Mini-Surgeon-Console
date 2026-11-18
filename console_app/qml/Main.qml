@@ -47,6 +47,35 @@ Window {
             color: "#f0b429"
             font.pixelSize: 18
         }
+
+        // REQ-VID-003: a picture that is not live must never look live. When frames stop, the
+        // last one stays on screen; this banner says so. Across the top edge, so most of the
+        // last picture stays visible (it still shows where the instruments were).
+        Rectangle {
+            id: videoWarning
+
+            readonly property bool frozen: video.videoState === VideoItem.Frozen
+            readonly property bool waiting: video.videoState === VideoItem.Waiting
+
+            visible: (frozen || waiting) && video.GraphicsInfo.api !== GraphicsInfo.Software
+            anchors {
+                left: video.left
+                right: video.right
+                top: video.top
+            }
+            height: 44
+            color: frozen ? "#c62828" : "#5f4b0b"
+
+            Text {
+                anchors.centerIn: parent
+                text: videoWarning.frozen
+                      ? qsTr("VIDEO FROZEN - last new frame %1 s ago").arg((video.frameAgeMs / 1000).toFixed(1))
+                      : qsTr("Waiting for video…")
+                color: "white"
+                font.pixelSize: 20
+                font.bold: videoWarning.frozen
+            }
+        }
     }
 
     // M4: state, link and fault information come from the teleop core.
@@ -96,6 +125,13 @@ Window {
                 text: qsTr("Video")
                 color: "#e6edf3"
                 font.pixelSize: 18
+            }
+            Text {
+                width: parent.width
+                text: qsTr("Source: %1").arg(video.sourceStatus)
+                wrapMode: Text.Wrap
+                color: "#9aa7b4"
+                font.pixelSize: 15
             }
             Text {
                 // Capture to present: from the camera's timestamp until the frame was handed

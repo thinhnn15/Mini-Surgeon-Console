@@ -1,8 +1,14 @@
+#include "freeze_check.hpp"
 #include "latency_report.hpp"
 #include "msc/common/clock.hpp"
+#include "msc/video/frame_source.hpp"
 #include "msc/video/synthetic_source.hpp"
 #include "video_check.hpp"
 #include "video_item.hpp"
+
+#if MSC_HAVE_CAMERA
+#include "camera_source.hpp"
+#endif
 
 #include <QGuiApplication>
 #include <QQmlApplicationEngine>
@@ -11,10 +17,26 @@
 #include <QTimer>
 
 #include <chrono>
+#include <cstdio>
+#include <functional>
 #include <memory>
 #include <optional>
 
 namespace {
+
+// `--name=value` or `--name value`. Nothing if the option is absent; an empty string if it is
+// given without a value.
+std::optional<QString> optionValue(const QStringList& args, const QString& name) {
+    for (qsizetype i = 1; i < args.size(); ++i) {
+        if (args[i] == name) {
+            return i + 1 < args.size() ? args[i + 1] : QString();
+        }
+        if (args[i].startsWith(name + QLatin1Char('='))) {
+            return args[i].mid(name.size() + 1);
+        }
+    }
+    return std::nullopt;
+}
 
 // `--measure-latency` (10 s) or `--measure-latency=SECONDS`.
 struct MeasureOption {
@@ -50,10 +72,34 @@ int main(int argc, char* argv[]) {
     const QStringList args = QCoreApplication::arguments();
     const bool smokeTest = args.contains(QStringLiteral("--smoke"));
     const bool videoCheck = args.contains(QStringLiteral("--check-video"));
+    const bool freezeCheck = args.contains(QStringLiteral("--check-freeze"));
     const MeasureOption measure = measureOption(args);
     if (measure.given && !measure.duration) {
         qCritical("console_app: --measure-latency=SECONDS needs a positive whole number of seconds");
         return 1;
+    }
+
+    // --source synthetic (default) | camera. The rest of the console does not know which.
+    const QString sourceName =
+        optionValue(args, QStringLiteral("--source")).value_or(QStringLiteral("synthetic"));
+    const bool wantCamera = sourceName == QLatin1String("camera");
+    if (!wantCamera && sourceName != QLatin1String("synthetic")) {
+        qCritical("console_app: --source must be \"synthetic\" or \"camera\"");
+        return 1;
+    }
+    // Both checks need a source they can stop, start and read the frame number from.
+    if (wantCamera && (videoCheck || freezeCheck)) {
+        qCritical("console_app: --check-video and --check-freeze use the synthetic source");
+        return 1;
+    }
+    if (args.contains(QStringLiteral("--list-cameras"))) {
+#if MSC_HAVE_CAMERA
+        CameraSource::listDevices();
+        return 0;
+#else
+        std::printf("Built without Qt Multimedia: no camera support.\n");
+        return 1;
+#endif
     }
 
     // --no-vsync: present as soon as a frame is drawn instead of waiting for the display's
@@ -66,10 +112,41 @@ int main(int argc, char* argv[]) {
     }
 
     // Declaration order is destruction order, reversed: the engine (window, render thread,
-    // renderer) goes first, then the source, then the clock the source stamps frames with.
+    // renderer) goes first, then the sources, then the clock they stamp frames with. The
+    // sources are destroyed here, on the GUI thread, after the renderer has let go of them
+    // (the camera's Qt Multimedia objects must be deleted on this thread).
     const msc::SteadyClock clock;
     const msc::video::SyntheticSourceConfig videoConfig{};
-    const auto source = std::make_shared<msc::video::SyntheticSource>(clock, videoConfig);
+    std::shared_ptr<msc::video::FrameSource> source;
+    std::shared_ptr<msc::video::SyntheticSource> synthetic;
+    QString fallbackReason;  // why the camera was asked for but the pattern is shown
+#if MSC_HAVE_CAMERA
+    std::shared_ptr<CameraSource> camera;
+    if (wantCamera) {
+        // --camera=TEXT picks a camera by name or id; without it, the system default.
+        const QString wanted = optionValue(args, QStringLiteral("--camera")).value_or(QString());
+        if (const std::optional<QCameraDevice> device = CameraSource::findDevice(wanted)) {
+            camera = std::make_shared<CameraSource>(clock, *device);
+            source = camera;
+        } else {
+            fallbackReason = wanted.isEmpty() ? QStringLiteral("no camera found")
+                                              : QStringLiteral("no camera matches \"%1\"").arg(wanted);
+        }
+    }
+#else
+    if (wantCamera) {
+        fallbackReason = QStringLiteral("built without camera support");
+    }
+#endif
+    if (!source) {
+        // Without a camera, the pattern: clearly labelled, so it is never mistaken for one.
+        if (!fallbackReason.isEmpty()) {
+            qWarning("console_app: %s, showing the synthetic test pattern instead",
+                     qPrintable(fallbackReason));
+        }
+        synthetic = std::make_shared<msc::video::SyntheticSource>(clock, videoConfig);
+        source = synthetic;
+    }
 
     QQmlApplicationEngine engine;
     QObject::connect(
@@ -87,17 +164,51 @@ int main(int argc, char* argv[]) {
         return 1;
     }
     video->setFrameSource(source, clock);
+    std::function<void()> reportSource;
+    if (synthetic) {
+        video->setSourceStatus(fallbackReason.isEmpty()
+                                   ? QStringLiteral("Synthetic test pattern")
+                                   : QStringLiteral("Synthetic test pattern (%1)").arg(fallbackReason));
+    }
+#if MSC_HAVE_CAMERA
+    if (camera) {
+        QObject::connect(camera.get(), &CameraSource::statusChanged, video, &VideoItem::setSourceStatus);
+        reportSource = [&camera] {
+            const CameraSource::Report r = camera->report();
+            const auto ms = [](const std::optional<msc::Nanoseconds>& t) {
+                return t ? std::chrono::duration<double, std::milli>(*t).count() : 0.0;
+            };
+            std::printf(
+                "  camera: %s %dx%d, delivered on %s, %llu frames converted%s, %llu replaced before "
+                "conversion\n",
+                qPrintable(r.pixelFormat), r.size.width(), r.size.height(),
+                r.deliveredOnGuiThread ? "the GUI thread" : "a backend thread",
+                static_cast<unsigned long long>(r.frames), r.viaImage ? " by Qt (toImage)" : "",
+                static_cast<unsigned long long>(r.replaced));
+            std::printf("  camera: conversion to RGBA p50 %.2f ms, p99 %.2f ms (camera thread)\n",
+                        ms(r.conversionP50), ms(r.conversionP99));
+        };
+    }
+#endif
     source->start();
+#if MSC_HAVE_CAMERA
+    if (camera) {
+        video->setSourceStatus(camera->status());
+    }
+#endif
 
     if (smokeTest) {
         QTimer::singleShot(0, &app, &QCoreApplication::quit);
     } else if (videoCheck) {
-        startVideoCheck(*window, *video, *source, videoConfig);
+        startVideoCheck(*window, *video, *synthetic, videoConfig);
+    } else if (freezeCheck) {
+        window->setFlag(Qt::WindowStaysOnTopHint, true);
+        startFreezeCheck(*window, *video, *source);
     } else if (measure.duration) {
         // On top for the same reason as the video check: a window hidden behind others may be
         // throttled, and that is not the latency being measured.
         window->setFlag(Qt::WindowStaysOnTopHint, true);
-        startLatencyMeasurement(*window, *video, *measure.duration);
+        startLatencyMeasurement(*window, *video, *measure.duration, reportSource);
     }
     return QGuiApplication::exec();
 }

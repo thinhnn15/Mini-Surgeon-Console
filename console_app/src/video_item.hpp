@@ -4,6 +4,7 @@
 #include "msc/common/latest_value.hpp"
 #include "msc/video/frame_source.hpp"
 #include "msc/video/presentation_tracker.hpp"
+#include "msc/video/video_signal.hpp"
 
 #include <QtQml/qqmlregistration.h>
 #include <QQuickRhiItem>
@@ -11,6 +12,8 @@
 
 #include <atomic>
 #include <chrono>
+#include <cstdint>
+#include <limits>
 #include <memory>
 #include <optional>
 
@@ -23,8 +26,14 @@ class VideoRenderer;
 // (REQ-VID-001's LatestValue) works whatever Qt does: the render thread publishes, the GUI
 // thread reads on a timer. Shared, because the renderer may outlive the item.
 struct VideoStatsChannel {
+    static constexpr std::int64_t kNoFrame = std::numeric_limits<std::int64_t>::min();
+
     msc::LatestValue<msc::video::PresentationStats> stats;  // render thread -> GUI thread
     std::atomic<bool> resetRequested{false};                // GUI thread -> render thread
+    // REQ-VID-003: Frame::captureTime (ns) of the newest frame drawn, or kNoFrame. Updated on
+    // every new frame, not every 250 ms like the statistics, so the frozen-picture watchdog
+    // reacts within its own period instead of waiting for the next statistics.
+    std::atomic<std::int64_t> newestCapture{kNoFrame};  // render thread -> GUI thread
 };
 
 // Shows the newest frame of a FrameSource, scaled to fit at its own aspect ratio (black bars
@@ -55,7 +64,22 @@ class VideoItem : public QQuickRhiItem {
     Q_PROPERTY(qint64 framesShown READ framesShown NOTIFY statsChanged FINAL)
     Q_PROPERTY(qint64 framesDropped READ framesDropped NOTIFY statsChanged FINAL)
 
+    // REQ-VID-003: is the picture live? Checked every kWatchdogPeriod on the GUI thread.
+    Q_PROPERTY(VideoState videoState READ videoState NOTIFY videoStateChanged FINAL)
+    // Age of the newest frame on screen; refreshed while the picture is not live.
+    Q_PROPERTY(double frameAgeMs READ frameAgeMs NOTIFY frameAgeChanged FINAL)
+    // What the source is, for the operator ("Logi C310, 640x480 YUYV", "synthetic pattern",
+    // "camera disconnected"). Set by whoever owns the source.
+    Q_PROPERTY(QString sourceStatus READ sourceStatus WRITE setSourceStatus NOTIFY sourceStatusChanged FINAL)
+
 public:
+    enum class VideoState : std::uint8_t {
+        Waiting = static_cast<std::uint8_t>(msc::video::VideoSignal::Waiting),
+        Live = static_cast<std::uint8_t>(msc::video::VideoSignal::Live),
+        Frozen = static_cast<std::uint8_t>(msc::video::VideoSignal::Frozen),
+    };
+    Q_ENUM(VideoState)
+
     explicit VideoItem(QQuickItem* parent = nullptr);
 
     // GUI thread. Shared ownership: the render thread may still hold the old source for a
@@ -80,8 +104,16 @@ public:
     [[nodiscard]] qint64 framesShown() const noexcept { return static_cast<qint64>(stats_.framesShown); }
     [[nodiscard]] qint64 framesDropped() const noexcept { return static_cast<qint64>(stats_.framesDropped); }
 
+    [[nodiscard]] VideoState videoState() const noexcept { return videoState_; }
+    [[nodiscard]] double frameAgeMs() const noexcept { return frameAgeMs_; }
+    [[nodiscard]] const QString& sourceStatus() const noexcept { return sourceStatus_; }
+    void setSourceStatus(const QString& status);
+
 signals:
     void statsChanged();
+    void videoStateChanged();
+    void frameAgeChanged();
+    void sourceStatusChanged();
 
 protected:
     QQuickRhiItemRenderer* createRenderer() override;
@@ -93,10 +125,15 @@ private:
     static double toMs(const std::optional<msc::Nanoseconds>& t) noexcept {
         return t ? std::chrono::duration<double, std::milli>(*t).count() : 0.0;
     }
+    void checkVideoSignal();
 
     std::shared_ptr<msc::video::FrameSource> source_;
     const msc::Clock* clock_ = nullptr;
     std::shared_ptr<VideoStatsChannel> channel_ = std::make_shared<VideoStatsChannel>();
     msc::video::PresentationStats stats_;  // GUI thread's copy, read from channel_
     QTimer statsTimer_;                    // reads channel_ and tells QML
+    QTimer watchdogTimer_;                 // REQ-VID-003, see checkVideoSignal()
+    VideoState videoState_ = VideoState::Waiting;
+    double frameAgeMs_ = 0.0;
+    QString sourceStatus_;
 };

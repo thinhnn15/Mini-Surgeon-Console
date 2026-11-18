@@ -25,7 +25,7 @@ every fault ends in a safe state that only an operator reset can leave.
 ## Milestones
 
 - [x] **M1** Skeleton: CMake, Qt 6 QML app, `arm_sim`, Google Test, CI on Windows and Linux, sanitizers
-- [ ] **M2** Video path: capture thread, latest-frame mailbox, `QQuickRhiItem`, latency measurement
+- [x] **M2** Video path: capture thread, latest-frame mailbox, `QQuickRhiItem`, latency measurement, webcam, frozen-picture warning
 - [ ] **M3** `arm_sim` at 1 kHz, UDP protocol, heartbeat in both directions
 - [ ] **M4** Teleop state machine (`std::variant`), watchdog, fault injector, tests with a fake clock
 - [ ] **M5** HUD overlay synchronised to the video by timestamp, hidden when stale
@@ -65,14 +65,24 @@ session. Pick a backend with `QSG_RHI_BACKEND=d3d11|d3d12|vulkan|opengl`.
 frames; add `--no-vsync` to present without waiting for the display. The same figures are on
 the console's side panel while it runs.
 
+`console_app --source camera` shows a webcam instead of the synthetic pattern (Qt Multimedia;
+the console builds without it). `--camera=TEXT` picks one by name or id, `--list-cameras` shows
+each camera's formats and the one used. Without a matching camera the console says so and shows
+the labelled pattern. If frames stop (camera unplugged, driver stalled), a red "VIDEO FROZEN"
+banner appears over the last picture; `console_app --check-freeze` tests that end to end.
+
+To run the exe from Explorer, copy Qt next to it once:
+`windeployqt --debug --qmldir console_app/qml build/windows-msvc/console_app/Debug/console_app.exe`
+(`--release` for a Release build). The tests do not need this.
+
 ## Layout
 
 ```
 common/        plain C++: CRC-32, clock, triple buffer / latest-value mailbox, latency percentiles
 video/         plain C++: Frame, test pattern with a sequence barcode, SyntheticSource, letterbox,
-               presentation timing
+               presentation timing, YUV to RGBA conversion, frozen-picture rule
 arm_sim/       the simulated arm process (plain C++, no Qt)
-console_app/   the Qt Quick console; VideoItem draws the video with QRhi (ADR 0003)
+console_app/   the Qt Quick console; VideoItem draws the video with QRhi (ADR 0003), CameraSource
 cmake/         warnings, sanitizers, GoogleTest
 docs/          requirements, risks, architecture decisions, dev journal
 ```
