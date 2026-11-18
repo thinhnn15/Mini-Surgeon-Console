@@ -17,6 +17,13 @@ Window {
         objectName: "teleop"
     }
 
+    // Faults on purpose (testing): the toggles at the right of the status bar.
+    FaultInjector {
+        id: faults
+
+        objectName: "faults"
+    }
+
     // A flat button: enabled only when the action would be accepted.
     component PanelButton: Rectangle {
         id: button
@@ -404,6 +411,51 @@ Window {
                       .arg(Qt.application.version)
             color: "#6b7a89"
             font.pixelSize: 13
+        }
+
+        // The fault injector, for testing the safety chain by hand. Red while a fault is injected.
+        Row {
+            anchors {
+                verticalCenter: parent.verticalCenter
+                right: parent.right
+                rightMargin: 12
+            }
+            spacing: 6
+            visible: faults.available
+
+            Text {
+                anchors.verticalCenter: parent.verticalCenter
+                text: qsTr("inject:")
+                color: "#6b7a89"
+                font.pixelSize: 13
+            }
+            Repeater {
+                model: ["link", "corrupt", "hand", "video", "fault"]
+
+                Rectangle {
+                    required property string modelData
+                    readonly property bool on: faults[modelData]
+
+                    width: chip.implicitWidth + 16
+                    height: 22
+                    radius: 11
+                    color: on ? "#8e1f1f" : "#1b2229"
+                    border.color: on ? "#da3633" : "#2d3740"
+
+                    Text {
+                        id: chip
+
+                        anchors.centerIn: parent
+                        text: parent.modelData
+                        color: parent.on ? "white" : "#9aa7b4"
+                        font.pixelSize: 12
+                    }
+                    MouseArea {
+                        anchors.fill: parent
+                        onClicked: faults[parent.modelData] = !parent.on
+                    }
+                }
+            }
         }
     }
 }

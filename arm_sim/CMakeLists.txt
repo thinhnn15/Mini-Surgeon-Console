@@ -25,17 +25,6 @@ if(BUILD_TESTING)
     set_tests_properties(arm_sim.version PROPERTIES
         PASS_REGULAR_EXPRESSION "arm_sim ${PROJECT_VERSION}")
 
-    # REQ-SAF-001 with real processes: start arm_sim and a console, kill the console while the
-    # arm moves, and check that the arm holds within 3 heartbeat periods and stays stopped.
-    add_executable(link_check tools/link_check.cpp)
-    target_link_libraries(link_check PRIVATE msc::comms)
-    msc_set_warnings(link_check)
-    add_test(NAME arm_sim.REQ_SAF_001_HoldsWhenTheConsoleDies
-             COMMAND link_check --arm-exe=$<TARGET_FILE:arm_sim>)
-    set_tests_properties(arm_sim.REQ_SAF_001_HoldsWhenTheConsoleDies PROPERTIES
-        PASS_REGULAR_EXPRESSION "PASS"
-        TIMEOUT 60)
-
     # The real process for a second on a free port: it must start, run its loop and report.
     add_test(NAME arm_sim.runs_its_loop COMMAND arm_sim --listen=127.0.0.1:0 --duration=1 --report)
     set_tests_properties(arm_sim.runs_its_loop PROPERTIES

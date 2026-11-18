@@ -256,6 +256,28 @@ TEST_F(Fixture, REQ_SAF_002_ResetIsRefusedWhileTheCauseIsPresentThenAccepted) {
     EXPECT_FALSE(arm.moving);
 }
 
+TEST_F(Fixture, REQ_SAF_002_ResetIsRefusedWhileTheArmStillDoesNotAcknowledge) {
+    // Found by the fault injector: the commands stop reaching the arm (corrupted on the way),
+    // the console faults, and the cause has to stay visible in Fault, where the console sends
+    // holds that must be acknowledged just the same.
+    engage();
+    for (int i = 0; i < 25; ++i) {
+        step(5ms, false);
+        arm.answerWithoutAck(ArmState::Holding);
+    }
+    ASSERT_EQ(status().state, StateKind::Fault);
+    core.request(Request::Reset);
+    step(5ms, false);
+    EXPECT_EQ(status().state, StateKind::Fault);
+    EXPECT_FALSE(status().resetAllowed);
+    // Acknowledgements come back: the reset goes through.
+    step();
+    EXPECT_TRUE(status().resetAllowed);
+    core.request(Request::Reset);
+    step();
+    EXPECT_EQ(status().state, StateKind::Idle);
+}
+
 TEST_F(Fixture, ARequestIsHandledOnce) {
     engage();
     core.request(Request::Disengage);

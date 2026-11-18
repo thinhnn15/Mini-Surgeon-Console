@@ -7,6 +7,7 @@
 #include "msc/comms/sequence_filter.hpp"
 #include "msc/comms/udp_socket.hpp"
 
+#include <atomic>
 #include <chrono>
 #include <cstddef>
 #include <cstdint>
@@ -70,6 +71,13 @@ public:
 // Threads: construct, start(), stop() on one thread; move() / hold() from one producer thread
 // (the teleop core) and readStatus() from one consumer thread (the teleop core too): both go
 // through lock-free LatestValue mailboxes.
+// Faults the link can fake, for the fault injector (M4.4).
+enum class LinkFault : std::uint8_t {
+    None,
+    Drop,     // the cable is pulled: nothing goes out, everything coming in is thrown away
+    Corrupt,  // every outgoing datagram has one bit flipped: the arm refuses them all (bad CRC)
+};
+
 class ArmLink final : public ArmPort {
 public:
     ArmLink(const Clock& clock, UdpSocket socket, ArmLinkConfig config = {});
@@ -85,6 +93,8 @@ public:
 
     void move(const JointArray& target) noexcept override;
     void hold() noexcept override;
+    // Any thread. Takes effect at the link thread's next send / receive.
+    void setFault(LinkFault fault) noexcept { fault_.store(fault, std::memory_order_relaxed); }
     [[nodiscard]] bool readStatus(ArmLinkStatus& status) noexcept override { return status_.read(status); }
 
     [[nodiscard]] const Endpoint& localEndpoint() const noexcept { return socket_.localEndpoint(); }
@@ -115,6 +125,7 @@ private:
     SequenceFilter fromArm_;
     std::uint32_t session_;
     std::uint32_t nextSequence_ = 1;
+    std::atomic<LinkFault> fault_{LinkFault::None};
 
     std::jthread thread_;  // last: stopped and joined before the members it uses go away
 };

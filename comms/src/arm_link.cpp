@@ -85,7 +85,9 @@ void ArmLink::receive(std::chrono::milliseconds timeout) {
     ReceiveResult r = socket_.receive(buffer, timeout);
     // After the first datagram, take whatever else is already waiting, without waiting again.
     while (r.status == ReceiveStatus::Datagram) {
-        handle(r, std::span(buffer).first(r.size));
+        if (fault_.load(std::memory_order_relaxed) != LinkFault::Drop) {
+            handle(r, std::span(buffer).first(r.size));
+        }
         r = socket_.receive(buffer, std::chrono::milliseconds{0});
     }
 }
@@ -127,6 +129,13 @@ void ArmLink::send(Nanoseconds now, const Message& message) {
     const std::size_t size = encode(packet, buffer);
     // A failed send is not retried: the next period sends newer data anyway, and if sends keep
     // failing the arm stops hearing heartbeats and holds.
+    const LinkFault fault = fault_.load(std::memory_order_relaxed);
+    if (fault == LinkFault::Drop) {
+        return;
+    }
+    if (fault == LinkFault::Corrupt) {
+        buffer[kHeaderSize / 2] ^= std::byte{0x10};  // one bit in the header: only the CRC can tell
+    }
     static_cast<void>(socket_.sendTo(std::span(buffer).first(size), config_.arm));
 }
 

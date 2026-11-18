@@ -245,6 +245,19 @@ TEST(ArmController, REQ_SAF_001_CommandsWithoutAHeartbeatAreIgnored) {
     EXPECT_EQ(arm.model().target(), all(0.0F));
 }
 
+TEST(ArmController, REQ_SAF_001_AnIgnoredCommandIsNotAcknowledged) {
+    // The telemetry's lastCommandSequence is the console's proof that a command was applied:
+    // a command ignored because the console was not alive must not appear there.
+    ManualClock clock;
+    ArmController arm(clock, openLoopback());
+    FakeConsole console;
+    console.command(arm.localEndpoint(), all(1.0F));  // no heartbeat first
+    ASSERT_TRUE(tickUntil(arm, clock, [&] { return arm.stats().commandsIgnored == 1; }));
+    std::optional<comms::JointTelemetry> report;
+    ASSERT_TRUE(tickUntil(arm, clock, [&] { return (report = console.drain().telemetry).has_value(); }));
+    EXPECT_EQ(report->lastCommandSequence, 0U);
+}
+
 TEST(ArmController, REQ_SAF_001_HoldsWithinThreeHeartbeatPeriodsOfSilence) {
     ManualClock clock;
     ArmController arm(clock, openLoopback());

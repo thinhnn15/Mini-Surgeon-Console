@@ -55,6 +55,8 @@ public:
     Q_INVOKABLE void setClutch(bool held);
     // The pad: x and y from -1 to 1. Moves joints 1 and 2 of the hand by up to kHandRange.
     Q_INVOKABLE void setHand(double x, double y);
+    // Fault injector: the hand controller stops reporting (no more samples to the core).
+    void setStalled(bool stalled) noexcept { stalled_ = stalled; }
 
     [[nodiscard]] QString state() const;
     [[nodiscard]] QString fault() const;
@@ -87,6 +89,7 @@ private:
     bool demoEngaged_ = false;
     std::chrono::steady_clock::time_point demoStart_;
     bool clutch_ = false;
+    bool stalled_ = false;
     double handX_ = 0.0;
     double handY_ = 0.0;
     int ticksSinceRefresh_ = 0;
