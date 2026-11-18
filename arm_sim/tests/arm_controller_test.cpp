@@ -148,15 +148,25 @@ TEST(ArmController, FollowsACommandAndReportsBackToTheSender) {
     EXPECT_EQ(arm.model().target(), all(0.5F));
 
     // A second of manual time, with heartbeats: the joints get there, and the telemetry says so.
+    // The console reads as it goes, like ArmLink does. Left unread, 1000 telemetry packets
+    // overflow its receive buffer, and UDP then drops the newest ones, not the oldest: the
+    // "newest" telemetry left in the buffer would be from the start of the move (seen under
+    // TSan on Linux, journal).
     for (int i = 0; i < 100; ++i) {
         ASSERT_TRUE(beat(arm, clock, console));
         for (int t = 0; t < 9; ++t) {
             clock.advance(1ms);
             arm.tick();
         }
+        static_cast<void>(console.drain());
     }
     std::optional<comms::JointTelemetry> report;
-    ASSERT_TRUE(tickUntil(arm, clock, [&] { return (report = console.drain().telemetry).has_value(); }));
+    ASSERT_TRUE(tickUntil(arm, clock, [&] {
+        if (const auto t = console.drain().telemetry) {
+            report = t;
+        }
+        return report && report->position == all(0.5F);
+    }));
     EXPECT_EQ(report->state, ArmState::Following);
     EXPECT_EQ(report->lastCommandSequence, 2U);  // heartbeat 1, command 2
     EXPECT_EQ(report->position, all(0.5F));

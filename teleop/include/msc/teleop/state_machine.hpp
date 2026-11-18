@@ -68,8 +68,8 @@ using State = std::variant<Idle, Engaged, Paused, Fault>;
 // ---- Events: operator actions and detected faults ------------------------------------------
 
 struct Engage {
-    JointArray hand{};  // the hand's pose now
-    JointArray arm{};   // the arm's measured pose now
+    JointArray hand{};   // the hand's pose now
+    JointArray arm{};    // the arm's measured pose now
     FaultSet present{};  // conditions that would fault at once: engage is refused
 };
 struct Disengage {};
