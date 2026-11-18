@@ -9,6 +9,7 @@
 #include "teleop_model.hpp"
 #include "video_item.hpp"
 
+#include <rhi/qrhi.h>
 #include <QCoreApplication>
 #include <QImage>
 #include <QObject>
@@ -61,6 +62,9 @@ constexpr std::size_t kMissedRingsAllowed = 2;
 constexpr auto kHiddenWithinLatencyPlus = 200ms;
 constexpr auto kBackWithin = 1500ms;
 constexpr auto kPollInterval = 8ms;
+
+// What the process exits with when the check cannot run here; CTest reports it as skipped.
+constexpr int kSkipExitCode = 77;
 
 constexpr auto kReadyTimeout = 20s;
 // Faults during start-up that the check resets and takes over from, before it gives up.
@@ -257,6 +261,21 @@ private:
     void waitReady(const std::optional<Sighting>& seen) {
         if (window_.rendererInterface()->graphicsApi() == QSGRendererInterface::Software) {
             fail("the software backend cannot draw the video item or the overlay");
+            return;
+        }
+        // A graphics device that is really the CPU (Windows' Basic Render Driver on a CI runner
+        // without a GPU): drawing the window then takes the cores the arm link needs. On the
+        // GitHub Windows runner the console lost the arm link (30 ms without a heartbeat) three
+        // times in two seconds with the window open, and never does without it. That is a
+        // finding about thread priorities (journal, M5.4), not about the overlay: skip.
+        if (const QRhi* rhi = window_.rhi();
+            rhi != nullptr && rhi->driverInfo().deviceType == QRhiDriverInfo::CpuDevice) {
+            std::printf("hud check: SKIPPED - this machine draws on the CPU (%s); the check needs a GPU\n",
+                        rhi->driverInfo().deviceName.constData());
+            std::fflush(stdout);
+            finished_ = true;
+            faults_.setLink(false);
+            QCoreApplication::exit(kSkipExitCode);
             return;
         }
         // A fault while the console is still starting up (on a CI runner that draws in software

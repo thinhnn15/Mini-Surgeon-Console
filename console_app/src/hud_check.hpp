@@ -24,7 +24,8 @@ class VideoItem;
 //      their arrival time costs. A figure for the journal, not a pass / fail.
 //
 // The frame size is the synthetic source's, to turn positions in what was drawn into frame pixels.
-// Exits the application with 0 on success, 1 on failure.
+// Exits the application with 0 on success, 1 on failure, 77 if the check cannot run on this
+// machine (no GPU: see the .cpp).
 void startHudCheck(QQuickWindow& window, VideoItem& video, TeleopModel& teleop, FaultInjector& faults,
                    const msc::hud::ArrivalJitter& arrivals, std::uint32_t frameWidth,
                    std::uint32_t frameHeight);
