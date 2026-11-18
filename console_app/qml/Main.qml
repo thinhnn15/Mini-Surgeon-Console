@@ -85,6 +85,39 @@ Window {
                 color: "#9aa7b4"
                 font.pixelSize: 15
             }
+
+            // Video timing (REQ-VID-002). Here, not over the picture: nothing should cover
+            // the surgeon's view (and the test pattern's barcode must stay readable).
+            Item {
+                width: 1
+                height: 8
+            }
+            Text {
+                text: qsTr("Video")
+                color: "#e6edf3"
+                font.pixelSize: 18
+            }
+            Text {
+                // Capture to present: from the camera's timestamp until the frame was handed
+                // to the OS for display. The panel itself adds a little more (glass-to-glass).
+                text: video.latencySamples > 0
+                      ? qsTr("Latency p50 / p99: %1 / %2 ms").arg(video.latencyP50Ms.toFixed(1))
+                                                             .arg(video.latencyP99Ms.toFixed(1))
+                      : qsTr("Latency: measuring…")
+                color: "#9aa7b4"
+                font.pixelSize: 15
+            }
+            Text {
+                text: qsTr("Render %1 fps · video %2 fps").arg(video.renderFps.toFixed(0))
+                                                          .arg(video.videoFps.toFixed(0))
+                color: "#9aa7b4"
+                font.pixelSize: 15
+            }
+            Text {
+                text: qsTr("Frames shown %1 · dropped %2").arg(video.framesShown).arg(video.framesDropped)
+                color: "#9aa7b4"
+                font.pixelSize: 15
+            }
         }
     }
 

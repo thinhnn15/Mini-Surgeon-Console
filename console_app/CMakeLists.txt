@@ -3,6 +3,9 @@ qt_standard_project_setup(REQUIRES 6.8)
 
 qt_add_executable(console_app
     src/main.cpp
+    src/graphics_api.hpp
+    src/latency_report.hpp
+    src/latency_report.cpp
     src/video_check.hpp
     src/video_check.cpp)
 
@@ -51,6 +54,14 @@ if(BUILD_TESTING)
     if(WIN32 OR DEFINED ENV{DISPLAY} OR DEFINED ENV{WAYLAND_DISPLAY})
         add_test(NAME console_app.REQ_VID_001_NewestFrameReachesTheScreen COMMAND console_app --check-video)
         set_tests_properties(console_app.REQ_VID_001_NewestFrameReachesTheScreen PROPERTIES
+            ENVIRONMENT_MODIFICATION "${qt_bin_path}"
+            TIMEOUT 60)
+
+        # REQ-VID-002: runs the real window for a few seconds and must report capture-to-present
+        # p50 and p99. The numbers themselves depend on the machine; they go in the journal.
+        add_test(NAME console_app.REQ_VID_002_LatencyIsMeasuredAndReported
+                 COMMAND console_app --measure-latency=3)
+        set_tests_properties(console_app.REQ_VID_002_LatencyIsMeasuredAndReported PROPERTIES
             ENVIRONMENT_MODIFICATION "${qt_bin_path}"
             TIMEOUT 60)
     endif()

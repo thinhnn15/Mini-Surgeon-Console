@@ -60,11 +60,17 @@ checking each time that the picture is letterboxed, not stretched. It needs a GP
 ctest registers it on Windows always and on Linux only when configured from a desktop
 session. Pick a backend with `QSG_RHI_BACKEND=d3d11|d3d12|vulkan|opengl`.
 
+`console_app --measure-latency[=SECONDS]` runs the console for a 2 s warm-up plus SECONDS
+(default 10) and prints capture-to-present p50 / p99 / max, render and video FPS, and dropped
+frames; add `--no-vsync` to present without waiting for the display. The same figures are on
+the console's side panel while it runs.
+
 ## Layout
 
 ```
-common/        plain C++: CRC-32, clock, triple buffer / latest-value mailbox (later: protocol)
-video/         plain C++: Frame, test pattern with a sequence barcode, SyntheticSource, letterbox
+common/        plain C++: CRC-32, clock, triple buffer / latest-value mailbox, latency percentiles
+video/         plain C++: Frame, test pattern with a sequence barcode, SyntheticSource, letterbox,
+               presentation timing
 arm_sim/       the simulated arm process (plain C++, no Qt)
 console_app/   the Qt Quick console; VideoItem draws the video with QRhi (ADR 0003)
 cmake/         warnings, sanitizers, GoogleTest

@@ -1,5 +1,6 @@
 #include "video_check.hpp"
 
+#include "graphics_api.hpp"
 #include "msc/video/frame.hpp"
 #include "msc/video/letterbox.hpp"
 #include "msc/video/test_pattern.hpp"
@@ -9,7 +10,6 @@
 #include <QImage>
 #include <QObject>
 #include <QQuickWindow>
-#include <QSGRendererInterface>
 #include <QScreen>
 #include <QTimer>
 
@@ -93,25 +93,6 @@ QSize placeOnItsScreen(QQuickWindow& window, QSize wanted) {
 
 bool near(int a, int b, int tolerance) {
     return std::abs(a - b) <= tolerance;
-}
-
-const char* apiName(QSGRendererInterface::GraphicsApi api) {
-    switch (api) {
-        case QSGRendererInterface::Direct3D11:
-            return "Direct3D 11";
-        case QSGRendererInterface::Direct3D12:
-            return "Direct3D 12";
-        case QSGRendererInterface::Vulkan:
-            return "Vulkan";
-        case QSGRendererInterface::Metal:
-            return "Metal";
-        case QSGRendererInterface::OpenGL:
-            return "OpenGL";
-        case QSGRendererInterface::Software:
-            return "software";
-        default:
-            return "unknown";
-    }
 }
 
 bool isBar(const QImage& grab, int x, int y) {
@@ -247,7 +228,7 @@ VideoCheck::Outcome VideoCheck::checkStep(const Step& step) {
     const std::uint64_t producedAfter = source_.framesProduced();
 
     std::printf("video check [%s]: %s, window %dx%d, grab %dx%d at device pixel ratio %.2f\n", step.name,
-                apiName(api), window_.width(), window_.height(), grab.width(), grab.height(),
+                graphicsApiName(api), window_.width(), window_.height(), grab.width(), grab.height(),
                 grab.devicePixelRatio());
 
     const auto fail = [&grab](const char* why) {
