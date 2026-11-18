@@ -1,11 +1,12 @@
-#include "arm_link_model.hpp"
 #include "freeze_check.hpp"
 #include "latency_report.hpp"
 #include "msc/common/clock.hpp"
 #include "msc/comms/arm_link.hpp"
 #include "msc/comms/udp_socket.hpp"
+#include "msc/teleop/teleop_core.hpp"
 #include "msc/video/frame_source.hpp"
 #include "msc/video/synthetic_source.hpp"
+#include "teleop_model.hpp"
 #include "video_check.hpp"
 #include "video_item.hpp"
 
@@ -180,6 +181,14 @@ int main(int argc, char* argv[]) {
         }
     }
 
+    // The teleop core (M4): its own 200 Hz thread, the arm link's only reader. Declared after the
+    // link, so it stops first; before the engine, so the QML model never outlives it.
+    std::optional<msc::teleop::TeleopCore> teleop;
+    if (armLink) {
+        teleop.emplace(clock, *armLink);
+        teleop->start();
+    }
+
     QQmlApplicationEngine engine;
     QObject::connect(
         &engine, &QQmlApplicationEngine::objectCreationFailed, &app, [] { QCoreApplication::exit(1); },
@@ -196,9 +205,16 @@ int main(int argc, char* argv[]) {
         return 1;
     }
     video->setFrameSource(source, clock);
-    if (auto* armModel = window->findChild<ArmLinkModel*>(QStringLiteral("armLink"));
-        armModel != nullptr && armLink) {
-        armModel->setLink(&*armLink, args.contains(QStringLiteral("--arm-demo")));
+    if (auto* teleopModel = window->findChild<TeleopModel*>(QStringLiteral("teleop"));
+        teleopModel != nullptr && teleop) {
+        teleopModel->setCore(&*teleop, &clock, args.contains(QStringLiteral("--hand-demo")));
+        // REQ-VID-003 -> M4.2: a picture that is not live (frozen, or no frame yet) stops
+        // tele-operation. The core reads the flag; it never waits for the video.
+        const auto updateVideo = [&teleop, video] {
+            teleop->setVideoLive(video->videoState() == VideoItem::VideoState::Live);
+        };
+        QObject::connect(video, &VideoItem::videoStateChanged, teleopModel, updateVideo);
+        updateVideo();
     }
     std::function<void()> reportSource;
     if (synthetic) {
@@ -235,6 +251,16 @@ int main(int argc, char* argv[]) {
 
     if (smokeTest) {
         QTimer::singleShot(0, &app, &QCoreApplication::quit);
+    } else if (const std::optional<QString> shot = optionValue(args, QStringLiteral("--screenshot"))) {
+        // --screenshot=FILE: let the window settle, save what it shows, quit. For the README and
+        // for checking the layout without a desktop (QT_QPA_PLATFORM=offscreen works).
+        QTimer::singleShot(std::chrono::milliseconds(2500), window, [window, file = *shot] {
+            const bool saved = window->grabWindow().save(file);
+            if (!saved) {
+                qCritical("console_app: could not save %s", qPrintable(file));
+            }
+            QCoreApplication::exit(saved ? 0 : 1);
+        });
     } else if (videoCheck) {
         startVideoCheck(*window, *video, *synthetic, videoConfig);
     } else if (freezeCheck) {

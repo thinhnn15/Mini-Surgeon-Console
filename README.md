@@ -69,12 +69,20 @@ the console's side panel while it runs.
 each joint's position, velocity and acceleration limits and sends `JointTelemetry` back.
 `arm_sim --listen=127.0.0.1:47001 --duration=5 --report` prints how evenly it ticked.
 
-The arm link demo (ADR 0001): start `arm_sim` in a terminal, then `console_app --arm-demo` (the
-console commands a slow back-and-forth motion; `--arm=A.B.C.D:PORT` if the arm is elsewhere).
-The side panel shows "Arm link: OK" and the arm following. Kill the console (Task Manager, or
+Tele-operation (M4): start `arm_sim` in a terminal, then `console_app` (`--arm=A.B.C.D:PORT` if
+the arm is elsewhere). The side panel shows the teleop state, the arm link and the arm. Press
+Engage (E), then drag in the hand pad: the arm follows at half the motion. Hold Space (or the
+clutch button) to move the hand without moving the arm; on release it carries on from there.
+Esc disengages. Any fault (arm link lost, hand input stale, commands not acknowledged, the arm
+stopping on its own, video not live) turns the panel red and the arm holds; Reset (R) is only
+accepted once the cause is gone, and leads to Idle. `console_app --hand-demo` drives the hand
+from a script instead of the mouse.
+
+The arm-side safety demo (ADR 0001): with the arm following, kill the console (Task Manager, or
 `taskkill /F /IM console_app.exe`): within 30 ms `arm_sim` prints "console link lost" and
 "holding position", brakes and stays there. `link_check` tests exactly that with two real
-processes.
+processes. `console_app --screenshot=FILE` saves the window after 2.5 s and quits (with
+`QT_QPA_PLATFORM=offscreen` and `QT_QPA_FONTDIR=C:/Windows/Fonts` it works without a desktop).
 
 `console_app --source camera` shows a webcam instead of the synthetic pattern (Qt Multimedia;
 the console builds without it). `--camera=TEXT` picks one by name or id, `--list-cameras` shows

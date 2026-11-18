@@ -9,11 +9,66 @@ Window {
     color: "#101418"
     title: qsTr("Mini Surgeon Console")
 
-    // The arm link's state for the side panel. main.cpp finds it by objectName and gives it the link.
-    ArmLinkModel {
-        id: armLink
+    // The teleop core's state, and the hand controller. main.cpp finds it by objectName and gives
+    // it the core. The UI shows what the core decided and passes requests on; it decides nothing.
+    TeleopModel {
+        id: teleop
 
-        objectName: "armLink"
+        objectName: "teleop"
+    }
+
+    // A flat button: enabled only when the action would be accepted.
+    component PanelButton: Rectangle {
+        id: button
+
+        property string label
+        property bool active: true
+        signal clicked
+
+        implicitHeight: 34
+        radius: 4
+        color: !active ? "#232b33" : (mouse.pressed ? "#3a4652" : "#2d3740")
+        border.color: active ? "#4b5a68" : "#2d3740"
+
+        Text {
+            anchors.centerIn: parent
+            text: button.label
+            color: button.active ? "#e6edf3" : "#5b6876"
+            font.pixelSize: 14
+        }
+        MouseArea {
+            id: mouse
+
+            anchors.fill: parent
+            enabled: button.active
+            onClicked: button.clicked()
+        }
+    }
+
+    // Keyboard, as on a console with pedals: Space held = clutch, E engage, Esc disengage, R reset.
+    Item {
+        anchors.fill: parent
+        focus: true
+
+        Keys.onPressed: event => {
+            if (event.isAutoRepeat) {
+                return;
+            }
+            if (event.key === Qt.Key_Space) {
+                teleop.setClutch(true);
+            } else if (event.key === Qt.Key_E) {
+                teleop.engage();
+            } else if (event.key === Qt.Key_Escape) {
+                teleop.disengage();
+            } else if (event.key === Qt.Key_R) {
+                teleop.reset();
+            }
+        }
+        Keys.onReleased: event => {
+            if (!event.isAutoRepeat && event.key === Qt.Key_Space) {
+                teleop.setClutch(false);
+            }
+        }
     }
 
     // M2: the endoscope video, drawn by VideoItem (a QQuickRhiItem). M5 adds the HUD overlay.
@@ -29,6 +84,9 @@ Window {
         }
         color: "#1b2229"
         radius: 6
+        // The frame says who drives the arm: green while the hand does, red in fault.
+        border.width: 3
+        border.color: teleop.state === "engaged" ? "#2ea043" : (teleop.state === "fault" ? "#da3633" : "#1b2229")
 
         // The endoscope view. main.cpp finds it by objectName and gives it the frame source.
         VideoItem {
@@ -85,7 +143,7 @@ Window {
         }
     }
 
-    // M4: state, link and fault information come from the teleop core.
+    // M4: the teleop state and controls, then the arm link and the video timing.
     Rectangle {
         id: sidePanel
 
@@ -95,40 +153,195 @@ Window {
             bottom: statusBar.top
             margins: 12
         }
-        width: 280
+        width: 300
         color: "#1b2229"
         radius: 6
 
         Column {
+            id: panel
+
             anchors {
                 fill: parent
-                margins: 16
+                margins: 14
             }
-            spacing: 12
+            spacing: 8
+
+            // The state, impossible to miss. In fault: why, and what the operator can do.
+            Rectangle {
+                width: panel.width
+                height: stateColumn.implicitHeight + 16
+                radius: 4
+                color: {
+                    switch (teleop.state) {
+                    case "engaged": return "#1f6f3a";
+                    case "paused": return "#6b5310";
+                    case "fault": return "#8e1f1f";
+                    default: return "#2d3740";
+                    }
+                }
+
+                Column {
+                    id: stateColumn
+
+                    anchors {
+                        left: parent.left
+                        right: parent.right
+                        verticalCenter: parent.verticalCenter
+                        margins: 10
+                    }
+                    spacing: 2
+
+                    Text {
+                        text: {
+                            switch (teleop.state) {
+                            case "engaged": return qsTr("ENGAGED - hand drives the arm");
+                            case "paused": return qsTr("PAUSED - clutch held, arm holds");
+                            case "fault": return qsTr("FAULT");
+                            case "idle": return qsTr("Idle - arm holds");
+                            default: return qsTr("Teleop not available (no arm link)");
+                            }
+                        }
+                        color: "white"
+                        font.pixelSize: 16
+                        font.bold: teleop.state === "fault" || teleop.state === "engaged"
+                    }
+                    Text {
+                        visible: teleop.state === "fault"
+                        width: parent.width
+                        wrapMode: Text.Wrap
+                        text: qsTr("%1 (%2 s ago). The arm is holding.").arg(teleop.fault)
+                                                                        .arg(teleop.faultAgeSeconds.toFixed(0))
+                        color: "white"
+                        font.pixelSize: 14
+                    }
+                    Text {
+                        visible: teleop.state === "fault" || (teleop.state === "idle" && !teleop.engageAllowed)
+                        width: parent.width
+                        wrapMode: Text.Wrap
+                        text: teleop.present.length > 0
+                              ? qsTr("Still present: %1").arg(teleop.present.join(", "))
+                              : qsTr("Cause cleared: press Reset (R).")
+                        color: "#f0d0d0"
+                        font.pixelSize: 13
+                    }
+                }
+            }
+
+            Row {
+                spacing: 6
+
+                PanelButton {
+                    width: (panel.width - 12) / 3
+                    label: qsTr("Engage (E)")
+                    active: teleop.engageAllowed
+                    onClicked: teleop.engage()
+                }
+                PanelButton {
+                    width: (panel.width - 12) / 3
+                    label: qsTr("Disengage")
+                    active: teleop.state === "engaged" || teleop.state === "paused"
+                    onClicked: teleop.disengage()
+                }
+                PanelButton {
+                    width: (panel.width - 12) / 3
+                    label: qsTr("Reset (R)")
+                    active: teleop.resetAllowed
+                    onClicked: teleop.reset()
+                }
+            }
+
+            // Held, not toggled: letting go of a pedal must always end the clutch.
+            PanelButton {
+                width: panel.width
+                label: teleop.clutch ? qsTr("CLUTCH HELD") : qsTr("Hold for clutch (Space)")
+                active: true
+                color: teleop.clutch ? "#6b5310" : (clutchMouse.pressed ? "#3a4652" : "#2d3740")
+
+                MouseArea {
+                    id: clutchMouse
+
+                    anchors.fill: parent
+                    onPressed: teleop.setClutch(true)
+                    onReleased: teleop.setClutch(false)
+                    onCanceled: teleop.setClutch(false)
+                }
+            }
 
             Text {
-                text: qsTr("State: Idle")
-                color: "#e6edf3"
-                font.pixelSize: 18
+                visible: teleop.refusal !== ""
+                width: panel.width
+                wrapMode: Text.Wrap
+                text: qsTr("Refused: %1").arg(teleop.refusal)
+                color: "#f0b429"
+                font.pixelSize: 13
             }
-            // M3: the link to arm_sim, from the comms thread. Red when the arm's heartbeats stop:
-            // the arm then holds on its own (REQ-SAF-001), and the operator has to know why.
+
+            // The hand controller stand-in: drag to move the hand (joints 1 and 2).
+            Rectangle {
+                id: pad
+
+                width: panel.width
+                height: 150
+                radius: 4
+                color: "#11161b"
+                border.color: "#2d3740"
+
+                Rectangle {
+                    anchors.centerIn: parent
+                    width: parent.width
+                    height: 1
+                    color: "#2d3740"
+                }
+                Rectangle {
+                    anchors.centerIn: parent
+                    width: 1
+                    height: parent.height
+                    color: "#2d3740"
+                }
+                Rectangle {
+                    width: 16
+                    height: 16
+                    radius: 8
+                    x: (teleop.handX + 1) / 2 * (pad.width - width)
+                    y: (1 - (teleop.handY + 1) / 2) * (pad.height - height)
+                    color: teleop.clutch ? "#f0b429" : (teleop.state === "engaged" ? "#3fb950" : "#9aa7b4")
+                }
+                Text {
+                    anchors {
+                        left: parent.left
+                        bottom: parent.bottom
+                        margins: 6
+                    }
+                    text: teleop.demo ? qsTr("hand: scripted (--hand-demo)") : qsTr("hand: drag here")
+                    color: "#5b6876"
+                    font.pixelSize: 12
+                }
+                MouseArea {
+                    anchors.fill: parent
+                    enabled: !teleop.demo
+                    function move(mouse) {
+                        teleop.setHand(mouse.x / width * 2 - 1, 1 - mouse.y / height * 2);
+                    }
+                    onPressed: mouse => move(mouse)
+                    onPositionChanged: mouse => move(mouse)
+                }
+            }
+
+            // M3: the link to arm_sim. Red when the arm's heartbeats stop: the arm then holds on
+            // its own (REQ-SAF-001), and the operator has to know why.
             Text {
-                text: qsTr("Arm link: %1").arg(armLink.link)
-                color: armLink.linkOk ? "#3fb950" : (armLink.link === "lost" ? "#f85149" : "#9aa7b4")
+                text: qsTr("Arm link: %1").arg(teleop.link)
+                color: teleop.link === "OK" ? "#3fb950" : (teleop.link === "lost" ? "#f85149" : "#9aa7b4")
                 font.pixelSize: 15
             }
             Text {
-                visible: armLink.armState !== ""
-                text: qsTr("Arm: %1%2").arg(armLink.armState)
-                                       .arg(armLink.joints.length > 0
-                                            ? " · j1 " + armLink.joints[0].toFixed(2) + " rad" : "")
-                color: armLink.armState === "holding" ? "#f0b429" : "#9aa7b4"
-                font.pixelSize: 15
-            }
-            Text {
-                text: qsTr("Faults: none")
-                color: "#9aa7b4"
+                visible: teleop.armState !== ""
+                text: qsTr("Arm: %1%2").arg(teleop.armState)
+                                       .arg(teleop.joints.length > 1
+                                            ? " · j1 %1 · j2 %2 rad".arg(teleop.joints[0].toFixed(2))
+                                                                    .arg(teleop.joints[1].toFixed(2))
+                                            : "")
+                color: teleop.armState === "holding" ? "#f0b429" : "#9aa7b4"
                 font.pixelSize: 15
             }
 
@@ -136,19 +349,19 @@ Window {
             // the surgeon's view (and the test pattern's barcode must stay readable).
             Item {
                 width: 1
-                height: 8
+                height: 4
             }
             Text {
                 text: qsTr("Video")
                 color: "#e6edf3"
-                font.pixelSize: 18
+                font.pixelSize: 16
             }
             Text {
-                width: parent.width
+                width: panel.width
                 text: qsTr("Source: %1").arg(video.sourceStatus)
                 wrapMode: Text.Wrap
                 color: "#9aa7b4"
-                font.pixelSize: 15
+                font.pixelSize: 14
             }
             Text {
                 // Capture to present: from the camera's timestamp until the frame was handed
@@ -158,18 +371,14 @@ Window {
                                                              .arg(video.latencyP99Ms.toFixed(1))
                       : qsTr("Latency: measuring…")
                 color: "#9aa7b4"
-                font.pixelSize: 15
+                font.pixelSize: 14
             }
             Text {
-                text: qsTr("Render %1 fps · video %2 fps").arg(video.renderFps.toFixed(0))
-                                                          .arg(video.videoFps.toFixed(0))
+                text: qsTr("Render %1 fps · video %2 fps · dropped %3").arg(video.renderFps.toFixed(0))
+                                                                       .arg(video.videoFps.toFixed(0))
+                                                                       .arg(video.framesDropped)
                 color: "#9aa7b4"
-                font.pixelSize: 15
-            }
-            Text {
-                text: qsTr("Frames shown %1 · dropped %2").arg(video.framesShown).arg(video.framesDropped)
-                color: "#9aa7b4"
-                font.pixelSize: 15
+                font.pixelSize: 14
             }
         }
     }
@@ -191,7 +400,8 @@ Window {
                 left: parent.left
                 leftMargin: 12
             }
-            text: qsTr("M2 video · v%1").arg(Qt.application.version)
+            text: qsTr("M4 teleoperation · v%1 · Space clutch · E engage · Esc disengage · R reset")
+                      .arg(Qt.application.version)
             color: "#6b7a89"
             font.pixelSize: 13
         }
