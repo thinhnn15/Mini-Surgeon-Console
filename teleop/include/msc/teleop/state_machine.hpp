@@ -70,7 +70,7 @@ using State = std::variant<Idle, Engaged, Paused, Fault>;
 struct Engage {
     JointArray hand{};  // the hand's pose now
     JointArray arm{};   // the arm's measured pose now
-    FaultSet present;   // conditions that would fault at once: engage is refused
+    FaultSet present{};  // conditions that would fault at once: engage is refused
 };
 struct Disengage {};
 struct ClutchPressed {};
@@ -82,7 +82,7 @@ struct FaultDetected {
     FaultCode code = FaultCode::Injected;
 };
 struct Reset {
-    FaultSet present;  // a reset is refused while a cause is still there
+    FaultSet present{};  // a reset is refused while a cause is still there
 };
 
 using Event = std::variant<Engage, Disengage, ClutchPressed, ClutchReleased, FaultDetected, Reset>;
