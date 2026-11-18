@@ -50,9 +50,9 @@ using msc::tools::Child;
 enum class Injection : std::uint8_t { Link, Corrupt, Hand, Video, Injected };
 
 struct Scenario {
-    Injection injection;
-    std::string_view name;
-    std::vector<FaultCode> expected;  // the first fault detected must be one of these
+    Injection injection = Injection::Injected;
+    std::string_view name{};
+    std::vector<FaultCode> expected{};  // the first fault detected must be one of these
 };
 
 double ms(Steady::duration d) {
@@ -137,11 +137,11 @@ private:
 };
 
 struct Row {
-    std::string_view name;
-    std::string detectedAs;
+    std::string_view name{};
+    std::string detectedAs{};
     double detectMs = 0.0;
     float stoppedAt = 0.0F;
-    std::string failure;  // empty: passed
+    std::string failure{};  // empty: passed
 };
 
 Row run(Console& console, const Scenario& scenario, float direction) {
