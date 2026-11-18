@@ -61,7 +61,10 @@ constexpr int kMinBar = 4;
 
 // The window sizes checked, in order. The first is the size from Main.qml; the others force
 // bars on different sides, so a stretched picture or a renderer that ignores a resize would
-// show up as a missing bar or an unreadable barcode. Sizes are shrunk to fit the screen.
+// show up as a missing bar or an unreadable barcode. Sizes are shrunk to fit the screen, so
+// each one must keep its shape on a small screen too: the CI runner's is 1024x768, where the
+// window becomes at most 984x648. Wide at 360 high leaves the video area well over 16:9 even
+// at 984 wide (about 656x292); an earlier 1700x560 shrank to a shape with bars top and bottom.
 enum class Bars : std::uint8_t { Any, TopAndBottom, LeftAndRight };
 struct Step {
     const char* name;
@@ -71,7 +74,7 @@ struct Step {
 constexpr std::array kSteps{
     Step{"default size", QSize(), Bars::Any},
     Step{"tall, bars top and bottom", QSize(720, 900), Bars::TopAndBottom},
-    Step{"wide, bars left and right", QSize(1700, 560), Bars::LeftAndRight},
+    Step{"wide, bars left and right", QSize(1700, 360), Bars::LeftAndRight},
 };
 
 // Centres the window on its screen at (at most) the wanted size and returns the size asked
@@ -132,6 +135,13 @@ public:
         // GUI thread, where grabbing and resizing are allowed.
         connect(&window_, &QQuickWindow::frameSwapped, this, &VideoCheck::onFramePresented,
                 Qt::QueuedConnection);
+        // Keep the window above everything else while the check runs. Windows does not let a
+        // new window take the foreground from the app the user is working in, so on a desktop
+        // in use it can open behind other windows, and what is grabbed should not depend on
+        // that. (It does not help when the display itself is off: on the dev PC, with the
+        // monitors probably asleep during a remote session, every backend dropped to a few
+        // frames per second and the check timed out. Run it with the display on.)
+        window_.setFlag(Qt::WindowStaysOnTopHint, true);
         place();
         QTimer::singleShot(kGiveUpAfter, this, [this] {
             std::printf("video check: FAIL - not finished after %lld s (step %zu, %d frames presented)\n",
@@ -224,8 +234,10 @@ VideoCheck::Outcome VideoCheck::checkStep(const Step& step) {
 
     if (!near(window_.width(), asked_.width(), kSizeTolerance) ||
         !near(window_.height(), asked_.height(), kSizeTolerance)) {
-        std::printf("video check [%s]: window %dx%d, asked for %dx%d\n", step.name, window_.width(),
-                    window_.height(), asked_.width(), asked_.height());
+        std::printf("video check [%s]: window %dx%d, asked for %dx%d (state %d, visibility %d, screen %s)\n",
+                    step.name, window_.width(), window_.height(), asked_.width(), asked_.height(),
+                    static_cast<int>(window_.windowStates().toInt()), static_cast<int>(window_.visibility()),
+                    qPrintable(window_.screen()->name()));
         return notSettled("size differs from what was asked");
     }
 
@@ -269,9 +281,12 @@ VideoCheck::Outcome VideoCheck::checkStep(const Step& step) {
                         static_cast<int>(box.width), static_cast<int>(box.height));
     std::printf("  item %dx%d, picture %dx%d at (%d, %d) inside it\n", itemPx.width(), itemPx.height(),
                 videoPx.width(), videoPx.height(), static_cast<int>(box.x), static_cast<int>(box.y));
+    // The window has the size asked for and the grab agrees, so the item geometry is current:
+    // bars on the wrong side mean the step's size does not suit this screen. Waiting would not
+    // change that (it is what made the first CI run retry until it gave up).
     if ((step.bars == Bars::TopAndBottom && static_cast<int>(box.y) < kMinBar) ||
         (step.bars == Bars::LeftAndRight && static_cast<int>(box.x) < kMinBar)) {
-        return notSettled("this size does not put the bars where the step needs them");
+        return fail("at this window size the bars are not where the step needs them (check the step sizes)");
     }
 
     // From here on, a mismatch is a wrong picture, not a window still moving: fail at once.
