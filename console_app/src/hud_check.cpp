@@ -63,6 +63,8 @@ constexpr auto kBackWithin = 1500ms;
 constexpr auto kPollInterval = 8ms;
 
 constexpr auto kReadyTimeout = 20s;
+// Faults during start-up that the check resets and takes over from, before it gives up.
+constexpr int kResetsAllowed = 3;
 constexpr auto kPhaseTimeout = 15s;
 constexpr auto kGiveUpAfter = 60s;
 // A blob smaller than this is not a tip or a ring (stray pixels at a scaled edge).
@@ -257,6 +259,27 @@ private:
             fail("the software backend cannot draw the video item or the overlay");
             return;
         }
+        // A fault while the console is still starting up (on a CI runner that draws in software
+        // the first frames can be far enough apart to count as a frozen picture) is not what
+        // this check is about: say what it was, reset, and take over again. The scripted hand
+        // only engages once by itself.
+        if (teleop_.state() == QLatin1String("fault")) {
+            if (!faultReported_) {
+                faultReported_ = true;
+                std::printf("  tele-operation faulted before the measurement: %s; still present: %s\n",
+                            qPrintable(teleop_.fault()),
+                            qPrintable(teleop_.present().join(QStringLiteral(", "))));
+                printVideo();
+                std::fflush(stdout);
+            }
+            if (teleop_.resetAllowed() && resets_ < kResetsAllowed) {
+                ++resets_;
+                faultReported_ = false;
+                teleop_.reset();
+            }
+        } else if (teleop_.state() == QLatin1String("idle") && resets_ > 0 && teleop_.engageAllowed()) {
+            teleop_.engage();
+        }
         const bool ready = video_.videoState() == VideoItem::VideoState::Live &&
                            teleop_.state() == QLatin1String("engaged") &&
                            teleop_.armState() == QLatin1String("following") && video_.hudShown();
@@ -268,18 +291,41 @@ private:
             return;
         }
         if (inPhase() > kReadyTimeout) {
-            std::printf("  video %s, teleop \"%s\", arm \"%s\", overlay: %s\n",
-                        video_.videoState() == VideoItem::VideoState::Live ? "live" : "not live",
-                        qPrintable(teleop_.state()), qPrintable(teleop_.armState()),
-                        qPrintable(video_.hudStatus()));
+            std::printf("  teleop \"%s\" (%d resets), arm \"%s\", overlay: %s\n", qPrintable(teleop_.state()),
+                        resets_, qPrintable(teleop_.armState()), qPrintable(video_.hudStatus()));
+            printVideo();
             fail("the arm never followed the hand with the overlay shown (is arm_sim running?)");
             return;
         }
         timer_.start(100ms);
     }
 
+    // How the video is doing: on a slow machine this is usually why the check cannot run.
+    void printVideo() const {
+        const msc::video::PresentationStats& stats = video_.stats();
+        std::printf(
+            "  video %s; render %.1f fps, video %.1f fps, capture to present p50 %.1f ms, p99 %.1f ms\n",
+            video_.videoState() == VideoItem::VideoState::Live ? "live" : "not live", stats.renderFps,
+            stats.videoFps, video_.latencyP50Ms(), video_.latencyP99Ms());
+    }
+
+    // The measurement needs the arm to keep following the hand. A fault in the middle of it
+    // would show up as figures that mean nothing (a ring on a tip that stands still).
+    [[nodiscard]] bool stillOperating() {
+        if (teleop_.state() == QLatin1String("engaged")) {
+            return true;
+        }
+        std::printf("  teleop \"%s\": %s\n", qPrintable(teleop_.state()), qPrintable(teleop_.fault()));
+        printVideo();
+        fail("tele-operation stopped during the measurement");
+        return false;
+    }
+
     // One sample of the mode being measured; after kSamples of them, on to the next mode.
     void measure(const std::optional<Sighting>& seen) {
+        if (!stillOperating()) {
+            return;
+        }
         const bool naive = phase_ == Phase::Naive;
         std::vector<Sighting>& samples = naive ? naive_ : synced_;
         std::size_t& missed = naive ? naiveMissed_ : syncedMissed_;
@@ -313,6 +359,9 @@ private:
     }
 
     void cutTheLink(const std::optional<Sighting>& seen) {
+        if (!stillOperating()) {
+            return;
+        }
         // Back in synchronised mode, with the ring on screen: now pull the cable.
         if (seen && seen->ring && seen->drawnAt > phaseStarted_ + Nanoseconds{100ms}) {
             faults_.setLink(true);
@@ -510,6 +559,8 @@ private:
     double backAfter_ = 0.0;
     double backError_ = 0.0;
     QString hiddenStatus_;
+    int resets_ = 0;
+    bool faultReported_ = false;
     bool finished_ = false;
 };
 
