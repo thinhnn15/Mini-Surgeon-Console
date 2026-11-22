@@ -23,6 +23,16 @@ if(BUILD_TESTING)
         FAIL_REGULAR_EXPRESSION "FAIL"
         TIMEOUT 120)
 
+    # M6.2 / REQ-SYS-001: a long session with arm_sim and console_app as real processes, every
+    # fault injected in turn, memory, handles and latency measured from outside. Registered as a
+    # CTest in console_app/CMakeLists.txt (it needs the console and a display).
+    add_executable(soak_check soak_check.cpp child_process.hpp)
+    target_link_libraries(soak_check PRIVATE msc::comms msc::soak)
+    if(WIN32)
+        target_link_libraries(soak_check PRIVATE psapi)
+    endif()
+    msc_set_warnings(soak_check)
+
     # M6.1: every requirement traced to the tests that carry its ID, every risk to tests that
     # exist, and docs/traceability.md up to date. Reads the sources, not CTest's list, which
     # differs between machines (the screen checks are registered only where there is a display).

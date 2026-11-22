@@ -10,6 +10,7 @@
 #include "msc/teleop/teleop_core.hpp"
 #include "msc/video/frame_source.hpp"
 #include "msc/video/synthetic_source.hpp"
+#include "soak_driver.hpp"
 #include "teleop_model.hpp"
 #include "tool_scene.hpp"
 #include "video_check.hpp"
@@ -74,6 +75,40 @@ MeasureOption measureOption(const QStringList& args) {
     return {};
 }
 
+// `--soak=SECONDS [--soak-interval=SECONDS]`: nothing if not given; an error text if a value is not
+// a positive whole number.
+struct SoakOption {
+    std::optional<SoakOptions> options;
+    QString error;
+};
+
+SoakOption soakOption(const QStringList& args) {
+    const std::optional<QString> duration = optionValue(args, QStringLiteral("--soak"));
+    if (!duration) {
+        return {};
+    }
+    const auto seconds = [](const QString& text) {
+        bool ok = false;
+        const int value = text.toInt(&ok);
+        return ok && value > 0 ? std::optional<std::chrono::seconds>(value) : std::nullopt;
+    };
+    SoakOptions options;
+    if (const auto d = seconds(*duration)) {
+        options.duration = *d;
+    } else {
+        return {std::nullopt, QStringLiteral("--soak=SECONDS needs a positive whole number of seconds")};
+    }
+    if (const std::optional<QString> interval = optionValue(args, QStringLiteral("--soak-interval"))) {
+        if (const auto i = seconds(*interval)) {
+            options.interval = *i;
+        } else {
+            return {std::nullopt,
+                    QStringLiteral("--soak-interval=SECONDS needs a positive whole number of seconds")};
+        }
+    }
+    return {options, {}};
+}
+
 }  // namespace
 
 int main(int argc, char* argv[]) {
@@ -86,6 +121,11 @@ int main(int argc, char* argv[]) {
     const bool videoCheck = args.contains(QStringLiteral("--check-video"));
     const bool freezeCheck = args.contains(QStringLiteral("--check-freeze"));
     const bool hudCheck = args.contains(QStringLiteral("--check-hud"));
+    const SoakOption soak = soakOption(args);
+    if (!soak.error.isEmpty()) {
+        qCritical("console_app: %s", qPrintable(soak.error));
+        return 1;
+    }
     const MeasureOption measure = measureOption(args);
     if (measure.given && !measure.duration) {
         qCritical("console_app: --measure-latency=SECONDS needs a positive whole number of seconds");
@@ -289,8 +329,10 @@ int main(int argc, char* argv[]) {
     auto* teleopModel = window->findChild<TeleopModel*>(QStringLiteral("teleop"));
     FaultInjector* faults = nullptr;
     if (teleopModel != nullptr && teleop) {
-        // The overlay check drives the arm with the scripted hand.
-        teleopModel->setCore(&*teleop, &clock, args.contains(QStringLiteral("--hand-demo")) || hudCheck);
+        // The overlay check and the soak test drive the arm with the scripted hand.
+        teleopModel->setCore(
+            &*teleop, &clock,
+            args.contains(QStringLiteral("--hand-demo")) || hudCheck || soak.options.has_value());
         // REQ-VID-003 -> M4.2: a picture that is not live (frozen, or no frame yet) stops
         // tele-operation. The core reads the flag; it never waits for the video.
         const auto updateVideo = [&teleop, video] {
@@ -366,6 +408,14 @@ int main(int argc, char* argv[]) {
     } else if (freezeCheck) {
         window->setFlag(Qt::WindowStaysOnTopHint, true);
         startFreezeCheck(*window, *video, *source);
+    } else if (soak.options) {
+        if (teleopModel == nullptr || faults == nullptr || !teleop) {
+            qCritical("console_app: --soak needs the arm link, the teleop model and the fault injector");
+            return 1;
+        }
+        // On top, like the other checks: a window hidden behind others may be throttled.
+        window->setFlag(Qt::WindowStaysOnTopHint, true);
+        startSoak(*window, *video, *teleopModel, *faults, clock, *soak.options);
     } else if (hudCheck) {
         if (teleopModel == nullptr || faults == nullptr || !teleop) {
             qCritical("console_app: --check-hud needs the arm link, the teleop model and the fault injector");

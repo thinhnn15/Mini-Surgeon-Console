@@ -11,6 +11,7 @@
 #include "msc/comms/protocol.hpp"
 #include "msc/comms/udp_socket.hpp"
 
+#include <algorithm>
 #include <atomic>
 #include <charconv>
 #include <chrono>
@@ -44,6 +45,7 @@ struct Options {
     msc::comms::Endpoint listen = msc::comms::Endpoint::loopback(kDefaultPort);
     msc::arm::ArmControllerConfig controller;
     std::optional<std::chrono::seconds> duration;
+    std::optional<std::chrono::seconds> reportEvery;  // one line of figures this often (soak test)
     bool report = false;
 };
 
@@ -111,6 +113,43 @@ void printReport(const msc::arm::ArmController& arm, std::chrono::duration<doubl
               << std::flush;
 }
 
+// `--report-every=SECONDS` (M6.2): one line, for tools/soak_check, with the figures that would show
+// the arm getting worse over a long session. Counters are totals since the start; the lateness
+// percentiles cover the last few seconds.
+void printPeriodicReport(const msc::arm::ArmController& arm, std::chrono::duration<double> ran) {
+    const auto& s = arm.stats();
+    std::cout
+        << std::format(
+               "arm_sim report t={:.1f} ticks={} overruns={} late_p99_ms={:.3f} late_max_ms={:.3f} holds={} "
+               "commands={} lost={}\n",
+               ran.count(), s.ticks, s.overruns, ms(arm.lateness().p99()), ms(arm.lateness().max()), s.holds,
+               s.commandsApplied, arm.consoleStats().lost)
+        << std::flush;
+}
+
+// The loop, for --duration or until Ctrl+C; with --report-every, in pieces of that length with a
+// line of figures after each (each run() starts its pacing afresh, which shifts the tick grid once
+// per piece, not the rate).
+void runArm(msc::arm::ArmController& arm, const Options& options,
+            std::chrono::steady_clock::time_point start) {
+    if (!options.reportEvery) {
+        arm.run(gStop, options.duration);
+        return;
+    }
+    while (!gStop.load(std::memory_order_relaxed)) {
+        const auto ran = std::chrono::steady_clock::now() - start;
+        if (options.duration && ran >= *options.duration) {
+            break;
+        }
+        msc::Nanoseconds piece = *options.reportEvery;
+        if (options.duration) {
+            piece = std::min(piece, std::chrono::duration_cast<msc::Nanoseconds>(*options.duration - ran));
+        }
+        arm.run(gStop, piece);
+        printPeriodicReport(arm, std::chrono::steady_clock::now() - start);
+    }
+}
+
 int run(std::span<char*> args) {
     Options options;
     for (const std::string_view arg : args.subspan(1)) {
@@ -141,6 +180,13 @@ int run(std::span<char*> args) {
                 return 1;
             }
             options.duration = std::chrono::seconds(*seconds);
+        } else if (const auto every = valueOf(arg, "--report-every")) {
+            const std::optional<int> seconds = positiveInteger(*every);
+            if (!seconds) {
+                std::cerr << "arm_sim: --report-every needs a positive whole number of seconds\n";
+                return 1;
+            }
+            options.reportEvery = std::chrono::seconds(*seconds);
         } else {
             std::cerr << "arm_sim: unknown option " << arg << '\n';
             return 1;
@@ -173,7 +219,7 @@ int run(std::span<char*> args) {
     };
     msc::arm::ArmController arm(clock, std::move(*socket), options.controller);
     const auto start = std::chrono::steady_clock::now();
-    arm.run(gStop, options.duration);
+    runArm(arm, options, start);
     if (options.report) {
         printReport(arm, std::chrono::steady_clock::now() - start);
     }
