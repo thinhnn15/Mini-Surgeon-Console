@@ -60,6 +60,18 @@ its ID, a test carries an ID that is not a requirement, a "Verified by" entry na
 does not exist or leaves one out, or a risk is not verified. `--write` regenerates
 [`docs/traceability.md`](docs/traceability.md), which the test also keeps up to date.
 
+Soak test (M6.2, REQ-SYS-001): `soak_check --arm-exe=PATH --console-exe=PATH --duration=SECONDS`
+starts `arm_sim` and `console_app --soak` as real processes. The console engages, lets the
+scripted hand move the arm, injects the next fault (link, corrupt, hand, video, generic), checks
+that it is detected and that a reset is refused while it lasts, clears it, resets, and so on round
+and round. From outside, `soak_check` samples both processes' private memory and handles, and
+reads the video's p99 latency and the arm's tick lateness. It fails on a fault nobody injected, a
+fault missed or reset too early, memory or handles still growing at the end, or latency getting
+worse. CTest runs it for 2 minutes where there is a display and a GPU; the 1-hour figures are in
+the journal. Keep the window visible: a compositor does not draw a covered window, the picture
+then really is not live, and the run stops as invalid. `arm_sim --report-every=SECONDS` prints the
+arm's figures it reads.
+
 `console_app --check-video` opens the real window, reads the frame number back from the
 screen and fails if it is not the newest frame, at three window sizes (default, tall, wide),
 checking each time that the picture is letterboxed, not stretched. It needs a GPU backend and a display, so
@@ -129,10 +141,12 @@ video/         plain C++: Frame, test pattern with a sequence barcode, Synthetic
                presentation timing, YUV to RGBA conversion, frozen-picture rule
 comms/         plain C++: the arm link's wire protocol (session, sequence, timestamp, CRC-32), sequence filter,
                UDP socket (Winsock / BSD sockets)
-tools/         end-to-end checks with real processes: link_check, safety_check; trace_check
+tools/         end-to-end checks with real processes: link_check, safety_check, soak_check; trace_check
                (requirements and risks traced to tests)
 teleop/        plain C++: the teleop state machine (std::variant), clutch and motion scaling, the teleop
                core (fixed-rate thread, watchdogs)
+soak/          plain C++: the soak test's operator (every fault in turn) and the rules that tell a
+               leak or a drift from noise
 hud/           plain C++: the overlay's logic: pose history (lookup by time), tool camera (joint angles
                to image), which frames get a marker (REQ-HUD-001)
 arm_sim/       the simulated arm process (plain C++, no Qt): joint model, 1 kHz controller
