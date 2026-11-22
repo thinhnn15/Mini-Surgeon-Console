@@ -1,6 +1,7 @@
 #include "hud_check.hpp"
 
 #include "fault_injector.hpp"
+#include "graphics_api.hpp"
 #include "msc/common/clock.hpp"
 #include "msc/hud/arrival_jitter.hpp"
 #include "msc/hud/hud_overlay.hpp"
@@ -276,11 +277,6 @@ private:
             std::printf("hud check: drawing on \"%s\"\n", rhi->driverInfo().deviceName.constData());
             std::fflush(stdout);
         }
-        const auto drawsOnTheCpu = [](const QRhiDriverInfo& info) {
-            const QByteArray name = info.deviceName.toLower();
-            return info.deviceType == QRhiDriverInfo::CpuDevice || name.contains("basic render") ||
-                   name.contains("warp") || name.contains("llvmpipe") || name.contains("swiftshader");
-        };
         if (rhi != nullptr && drawsOnTheCpu(rhi->driverInfo())) {
             std::printf("hud check: SKIPPED - this machine draws on the CPU (%s); the check needs a GPU\n",
                         rhi->driverInfo().deviceName.constData());

@@ -77,6 +77,11 @@ public:
     [[nodiscard]] double handX() const noexcept { return handX_; }
     [[nodiscard]] double handY() const noexcept { return handY_; }
     [[nodiscard]] bool demo() const noexcept { return demo_; }
+    // The core's newest status as this model last read it (every 50 ms), or null before the first.
+    // For the checks driven from C++ (--soak); QML uses the properties above.
+    [[nodiscard]] const msc::teleop::TeleopStatus* coreStatus() const noexcept {
+        return hasStatus_ ? &status_ : nullptr;
+    }
 
 signals:
     void changed();

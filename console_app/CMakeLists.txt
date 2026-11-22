@@ -18,6 +18,8 @@ qt_add_executable(console_app
     src/hud_check.cpp
     src/latency_report.hpp
     src/latency_report.cpp
+    src/soak_driver.hpp
+    src/soak_driver.cpp
     src/tool_scene.hpp
     src/video_check.hpp
     src/video_check.cpp)
@@ -51,7 +53,7 @@ qt_add_shaders(console_app "video_shaders"
 target_include_directories(console_app PRIVATE src)
 # GuiPrivate: QRhi (<rhi/qrhi.h>) is public API since Qt 6.6 but, with a weaker compatibility
 # promise than the rest of Qt, still lives in the private module.
-target_link_libraries(console_app PRIVATE Qt6::Quick Qt6::GuiPrivate msc::common msc::video msc::comms msc::teleop msc::hud)
+target_link_libraries(console_app PRIVATE Qt6::Quick Qt6::GuiPrivate msc::common msc::video msc::comms msc::teleop msc::hud msc::soak)
 target_compile_definitions(console_app PRIVATE MSC_VERSION="${PROJECT_VERSION}")
 set_target_properties(console_app PROPERTIES WIN32_EXECUTABLE ON MACOSX_BUNDLE ON)
 msc_set_warnings(console_app NO_WERROR)
@@ -122,5 +124,19 @@ if(BUILD_TESTING)
             ENVIRONMENT_MODIFICATION "${qt_test_env}"
             SKIP_RETURN_CODE 77
             TIMEOUT 120)
+
+        # REQ-SYS-001 (M6.2): two minutes of the real console and a real arm_sim, every fault in
+        # turn with a reset after each, memory, handles and latency measured from outside. The
+        # one-hour run is the same tool with --duration=3600 (journal). Skipped where the machine
+        # draws on the CPU, like the overlay check; fails as "invalid run" if the window is
+        # covered (a compositor does not draw a hidden window).
+        add_test(NAME soak.REQ_SYS_001_RepeatedFaultsWithoutLeaksOrDrift
+                 COMMAND soak_check --arm-exe=$<TARGET_FILE:arm_sim> --console-exe=$<TARGET_FILE:console_app>
+                         --duration=120 --interval=5 --out=${CMAKE_CURRENT_BINARY_DIR}/soak)
+        set_tests_properties(soak.REQ_SYS_001_RepeatedFaultsWithoutLeaksOrDrift PROPERTIES
+            ENVIRONMENT_MODIFICATION "${qt_test_env}"
+            PASS_REGULAR_EXPRESSION "\nPASS"
+            SKIP_RETURN_CODE 77
+            TIMEOUT 300)
     endif()
 endif()
