@@ -54,6 +54,12 @@ cmake --preset linux-gcc && cmake --build --preset linux-gcc && ctest --preset l
 cmake --preset linux-asan && cmake --build --preset linux-asan && ctest --preset linux-asan
 ```
 
+Traceability (M6.1): `trace_check --source-dir=.` (a CTest) finds every test in the sources,
+reads `docs/requirements.md` and `docs/risks.md`, and fails if a requirement has no test carrying
+its ID, a test carries an ID that is not a requirement, a "Verified by" entry names a test that
+does not exist or leaves one out, or a risk is not verified. `--write` regenerates
+[`docs/traceability.md`](docs/traceability.md), which the test also keeps up to date.
+
 `console_app --check-video` opens the real window, reads the frame number back from the
 screen and fails if it is not the newest frame, at three window sizes (default, tall, wide),
 checking each time that the picture is letterboxed, not stretched. It needs a GPU backend and a display, so
@@ -123,7 +129,8 @@ video/         plain C++: Frame, test pattern with a sequence barcode, Synthetic
                presentation timing, YUV to RGBA conversion, frozen-picture rule
 comms/         plain C++: the arm link's wire protocol (session, sequence, timestamp, CRC-32), sequence filter,
                UDP socket (Winsock / BSD sockets)
-tools/         end-to-end checks with real processes: link_check, safety_check
+tools/         end-to-end checks with real processes: link_check, safety_check; trace_check
+               (requirements and risks traced to tests)
 teleop/        plain C++: the teleop state machine (std::variant), clutch and motion scaling, the teleop
                core (fixed-rate thread, watchdogs)
 hud/           plain C++: the overlay's logic: pose history (lookup by time), tool camera (joint angles
@@ -132,5 +139,5 @@ arm_sim/       the simulated arm process (plain C++, no Qt): joint model, 1 kHz 
 console_app/   the Qt Quick console; VideoItem draws the video and the overlay with QRhi (ADR 0003),
                CameraSource
 cmake/         warnings, sanitizers, GoogleTest
-docs/          requirements, risks, architecture decisions, dev journal
+docs/          requirements, risks, traceability (generated), architecture decisions, dev journal
 ```
