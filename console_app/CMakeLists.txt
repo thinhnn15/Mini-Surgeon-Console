@@ -1,4 +1,9 @@
 find_package(Qt6 6.8 REQUIRED COMPONENTS Quick ShaderTools)
+# Since Qt 6.9 a private module's target (Qt6::GuiPrivate, used below) exists only when it is
+# asked for by name; 6.8 created it along with Gui.
+if(Qt6_VERSION VERSION_GREATER_EQUAL 6.9)
+    find_package(Qt6 REQUIRED COMPONENTS GuiPrivate)
+endif()
 # Only the camera source needs Qt Multimedia (M2.5). Without it the console still builds and
 # runs on the synthetic source.
 find_package(Qt6 6.8 QUIET OPTIONAL_COMPONENTS Multimedia)
