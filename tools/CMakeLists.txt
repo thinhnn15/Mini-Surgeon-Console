@@ -22,4 +22,26 @@ if(BUILD_TESTING)
         PASS_REGULAR_EXPRESSION "\nPASS"
         FAIL_REGULAR_EXPRESSION "FAIL"
         TIMEOUT 120)
+
+    # M6.1: every requirement traced to the tests that carry its ID, every risk to tests that
+    # exist, and docs/traceability.md up to date. Reads the sources, not CTest's list, which
+    # differs between machines (the screen checks are registered only where there is a display).
+    add_library(msc_trace STATIC trace.cpp trace.hpp)
+    target_include_directories(msc_trace PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
+    msc_set_warnings(msc_trace)
+
+    add_executable(trace_check trace_check.cpp)
+    target_link_libraries(trace_check PRIVATE msc_trace)
+    msc_set_warnings(trace_check)
+    add_test(NAME trace_check.EveryRequirementAndRiskIsTracedToTests
+             COMMAND trace_check --source-dir=${PROJECT_SOURCE_DIR})
+    set_tests_properties(trace_check.EveryRequirementAndRiskIsTracedToTests PROPERTIES
+        PASS_REGULAR_EXPRESSION "\nPASS"
+        FAIL_REGULAR_EXPRESSION "FAIL"
+        TIMEOUT 30)
+
+    add_executable(msc_trace_tests tests/trace_test.cpp)
+    target_link_libraries(msc_trace_tests PRIVATE msc_trace GTest::gtest_main)
+    msc_set_warnings(msc_trace_tests)
+    gtest_discover_tests(msc_trace_tests)
 endif()
